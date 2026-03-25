@@ -2,6 +2,7 @@
 """
 Simple OVA Build Manager with Python Backend
 Dynamic version column tracking from images.txt
+Enhanced with date sorting and validation error focusing
 """
 
 from flask import Flask, render_template_string, jsonify, request
@@ -15,6 +16,7 @@ from flask_socketio import SocketIO, emit
 import threading
 import json
 from markupsafe import Markup 
+from datetime import datetime
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "your-secret-key-here"
@@ -119,6 +121,10 @@ HTML_TEMPLATE = """
         .builds-table { width: 100%; border-collapse: collapse; margin-top: 20px; table-layout: auto; }
         .builds-table thead { background: #495057; color: white; position: sticky; top: 0; z-index: 10; }
         .builds-table th { padding: 12px 15px; text-align: left; font-weight: 600; white-space: nowrap; }
+        .builds-table th.sortable { cursor: pointer; user-select: none; }
+        .builds-table th.sortable:hover { background: #5a6268; }
+        .builds-table th .sort-icon { margin-left: 5px; font-size: 0.8em; opacity: 0.5; }
+        .builds-table th.sort-active .sort-icon { opacity: 1; }
         .builds-table td { padding: 12px 15px; border-bottom: 1px solid #dee2e6; }
         .builds-table tbody tr:hover { background: #f8f9fa; }
 
@@ -213,8 +219,19 @@ HTML_TEMPLATE = """
         }
         .create-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102,126,234,0.4); }
         .create-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .alert { padding: 15px 20px; border-radius: 6px; margin-bottom: 20px; display: none; }
+        .alert { 
+            padding: 15px 20px; border-radius: 6px; margin-bottom: 20px; display: none;
+            scroll-margin-top: 20px;
+        }
         .alert.show { display: block; }
+        .alert.shake {
+            animation: shake 0.5s;
+        }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+            20%, 40%, 60%, 80% { transform: translateX(5px); }
+        }
         .alert-success { background: #d4edda; color: #155724; border-left: 4px solid #28a745; }
         .alert-error   { background: #f8d7da; color: #721c24; border-left: 4px solid #dc3545; }
         .alert-info    { background: #d1ecf1; color: #0c5460; border-left: 4px solid #17a2b8; }
@@ -277,7 +294,7 @@ HTML_TEMPLATE = """
                 <button class="refresh-btn" style="margin-bottom:0;background:#28a745;" onclick="openBlankTerminal()">💻 Just Open Terminal</button>
             </div>
         </div>
-
+        <div class="alert" id="alert"></div>
         <!-- QPod Capacity -->
         <div id="capacity-section" style="margin-bottom:30px;">
             <div class="credentials-section">
@@ -325,7 +342,6 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <div class="alert" id="alert"></div>
 
         <!-- Profile Release Version -->
         <div class="col-manager" style="margin-bottom:20px;">
@@ -401,6 +417,7 @@ let buildStatuses = {};
 let activeDeployments = {};
 let terminals = [];
 let terminalSockets = [];
+let currentSort = { column: 'date', direction: 'desc' }; // Default sort
 
 // ── QPod management ───────────────────────────────────────────────────────────
 function loadQpods() {
@@ -632,40 +649,155 @@ function stopDeployment(buildName) {
     showAlert('Monitoring stopped for ' + buildName, 'info');
 }
 
+// ── Sorting functionality ─────────────────────────────────────────────────────
+function parseDate(dateStr) {
+    if (!dateStr || dateStr === 'N/A') return null;
+    try {
+        // Parse format: "02-Mar-2024 12:34"
+        const parts = dateStr.split(' ');
+        const datePart = parts[0].split('-');
+        const timePart = parts[1] ? parts[1].split(':') : ['00', '00'];
+        
+        const monthMap = {
+            'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+            'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+        };
+        
+        const day = parseInt(datePart[0]);
+        const month = monthMap[datePart[1]];
+        const year = parseInt(datePart[2]);
+        const hour = parseInt(timePart[0]);
+        const minute = parseInt(timePart[1]);
+        
+        return new Date(year, month, day, hour, minute);
+    } catch(e) {
+        return null;
+    }
+}
+
+function sortBuilds(column) {
+    // Toggle direction if same column, else default to desc
+    if (currentSort.column === column) {
+        currentSort.direction = currentSort.direction === 'desc' ? 'asc' : 'desc';
+    } else {
+        currentSort.column = column;
+        currentSort.direction = column === 'date' ? 'desc' : 'asc'; // dates default to newest first
+    }
+    
+    builds.sort((a, b) => {
+        let valA, valB;
+        
+        if (column === 'name') {
+            valA = a.name.toLowerCase();
+            valB = b.name.toLowerCase();
+        } else if (column === 'date') {
+            valA = parseDate(a.date);
+            valB = parseDate(b.date);
+            
+            // Handle null dates
+            if (!valA && !valB) return 0;
+            if (!valA) return 1;
+            if (!valB) return -1;
+        }
+        
+        let result;
+        if (valA < valB) result = -1;
+        else if (valA > valB) result = 1;
+        else result = 0;
+        
+        return currentSort.direction === 'desc' ? -result : result;
+    });
+    
+    renderBuilds();
+}
+
 // ── Table rendering ───────────────────────────────────────────────────────────
 function renderBuilds() {
-    const visibleCols = trackedCols.filter(c => c.visible);
+    var visibleCols = trackedCols.filter(function(c) { return c.visible; });
 
-    const headRow = document.getElementById('table-head-row');
-    headRow.innerHTML =
-        '<th>Build Number</th>' +
-        '<th>Date</th>' +
-        visibleCols.map(c => '<th>' + escapeHtml(c.label) + '</th>').join('') +
-        '<th>Status &amp; Progress</th>' +
-        '<th>Action</th>';
+    var headRow = document.getElementById('table-head-row');
+    headRow.innerHTML = '';
 
-    const tbody = document.getElementById('builds-tbody');
+    var buildSortIcon = currentSort.column === 'name' ? (currentSort.direction === 'desc' ? '▼' : '▲') : '⇅';
+    var dateSortIcon  = currentSort.column === 'date' ? (currentSort.direction === 'desc' ? '▼' : '▲') : '⇅';
+
+    function makeHeaderCell(label, colKey, sortIcon) {
+        var th = document.createElement('th');
+        th.className = 'sortable' + (currentSort.column === colKey ? ' sort-active' : '');
+        th.innerHTML = label + ' <span class="sort-icon">' + sortIcon + '</span>';
+        th.onclick = function() { sortBuilds(colKey); };
+        return th;
+    }
+
+    headRow.appendChild(makeHeaderCell('Build Number', 'name', buildSortIcon));
+    headRow.appendChild(makeHeaderCell('Date', 'date', dateSortIcon));
+    visibleCols.forEach(function(c) {
+        var th = document.createElement('th');
+        th.textContent = c.label;
+        headRow.appendChild(th);
+    });
+    var thStatus = document.createElement('th');
+    thStatus.innerHTML = 'Status &amp; Progress';
+    headRow.appendChild(thStatus);
+    var thAction = document.createElement('th');
+    thAction.textContent = 'Action';
+    headRow.appendChild(thAction);
+
+    var tbody = document.getElementById('builds-tbody');
     tbody.innerHTML = '';
-    builds.forEach((build, index) => {
-        const row = document.createElement('tr');
+
+    builds.forEach(function(build, index) {
+        var row = document.createElement('tr');
         row.className = 'build-row';
         row.id = 'build-row-' + index;
         row.setAttribute('data-build-name', build.name.toLowerCase());
         row.setAttribute('data-build-date', (build.date || '').toLowerCase());
 
-        const versionCells = visibleCols.map(col => {
-            const cached = (versionCache[build.name] || {})[col.key];
-            const cls = !cached ? 'loading' : (cached === 'N/A' || cached === 'Error' ? (cached === 'Error' ? 'error' : 'na') : '');
-            const text = cached || 'Loading...';
-            return '<td><span class="version-badge ' + cls + '" id="ver-' + index + '-' + sanitizeId(col.key) + '">' + escapeHtml(text) + '</span></td>';
-        }).join('');
+        var tdName = document.createElement('td');
+        tdName.className = 'build-number';
+        tdName.textContent = build.name;
+        row.appendChild(tdName);
 
-        row.innerHTML =
-            '<td class="build-number">' + escapeHtml(build.name) + '</td>' +
-            '<td style="color:#6c757d;white-space:nowrap;">' + (build.date || 'N/A') + '</td>' +
-            versionCells +
-            '<td class="status-cell">' + getStatusHTML(build.name) + '</td>' +
-            '<td><button class="create-btn" onclick="createBuild(' + index + ')">Create Setup</button></td>';
+        var tdDate = document.createElement('td');
+        tdDate.style.cssText = 'color:#6c757d;white-space:nowrap;';
+        tdDate.textContent = build.date || 'N/A';
+        row.appendChild(tdDate);
+
+        visibleCols.forEach(function(col) {
+            var cached = (versionCache[build.name] || {})[col.key];
+            var td = document.createElement('td');
+            var span = document.createElement('span');
+            span.id = 'ver-' + index + '-' + sanitizeId(col.key);
+            span.className = 'version-badge';
+            if (!cached) {
+                span.className += ' loading';
+                span.textContent = 'Loading...';
+            } else if (cached === 'Error') {
+                span.className += ' error';
+                span.textContent = cached;
+            } else if (cached === 'N/A') {
+                span.className += ' na';
+                span.textContent = cached;
+            } else {
+                span.textContent = cached;
+            }
+            td.appendChild(span);
+            row.appendChild(td);
+        });
+
+        var tdStatus = document.createElement('td');
+        tdStatus.className = 'status-cell';
+        tdStatus.innerHTML = getStatusHTML(build.name);
+        row.appendChild(tdStatus);
+
+        var tdAction = document.createElement('td');
+        var btn = document.createElement('button');
+        btn.className = 'create-btn';
+        btn.textContent = 'Create Setup';
+        btn.onclick = (function(i) { return function() { createBuild(i); }; })(index);
+        tdAction.appendChild(btn);
+        row.appendChild(tdAction);
+
         tbody.appendChild(row);
     });
 }
@@ -726,6 +858,10 @@ async function loadBuilds() {
         loading.style.display = 'none';
         if (builds.error) { showAlert('Error: ' + builds.error, 'error'); return; }
         if (!builds.length) { showAlert('No builds found', 'error'); return; }
+        
+        // Builds are already sorted by date (newest first) from backend
+        currentSort = { column: 'date', direction: 'desc' };
+        
         renderBuilds();
         container.style.display = 'block';
         showAlert('Loaded ' + builds.length + ' builds! Fetching versions...', 'info');
@@ -879,7 +1015,7 @@ function executeInTerminal(unixId, password, qpod, buildName) {
     setBuildStatus(buildName, 'pending', qpod);
 
     const { term } = makeTerminal(terminalId, '🖥️ ' + buildName + ' @ ' + qpod);
-    term.writeln('\\x1b[1;36m🚀 OVA  Image Tool\\x1b[0m');
+    term.writeln('\\x1b[1;36m🚀 OVA Image Tool\\x1b[0m');
     term.writeln('\\x1b[90m' + '='.repeat(60) + '\\x1b[0m');
     term.writeln('\\x1b[1;33mQPod:\\x1b[0m ' + qpod + '.' + SSH_DOMAIN);
     term.writeln('\\x1b[1;33mBuild:\\x1b[0m ' + buildName);
@@ -1011,9 +1147,24 @@ async function checkCapacities() {
 
 function showAlert(msg, type) {
     const a = document.getElementById('alert');
-    a.textContent = msg; a.className = 'alert alert-' + type + ' show';
+    a.textContent = msg; 
+    a.className = 'alert alert-' + type + ' show';
+    
+    // Scroll to alert and add shake animation for errors
+    if (type === 'error') {
+        a.classList.add('shake');
+        setTimeout(() => a.classList.remove('shake'), 500);
+    }
+    
+    // Smooth scroll to alert
+    a.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
-function hideAlert() { document.getElementById('alert').className = 'alert'; }
+
+function hideAlert() { 
+    const a = document.getElementById('alert'); 
+    a.className = 'alert';
+    a.classList.remove('shake');
+}
 
 // ── Profile Version management ────────────────────────────────────────────────
 const DEFAULT_PROFILE_VERSIONS = ['2.7.0', '2.8.0', '2.9.0', '3.0.0'];
@@ -1134,7 +1285,16 @@ def fetch_builds():
                         }
                     )
 
-        builds.sort(key=lambda x: x["name"], reverse=True)
+        # Sort by date (newest first) - parse date format "02-Mar-2024 12:34"
+        def parse_build_date(build):
+            try:
+                if build["date"] != "N/A":
+                    return datetime.strptime(build["date"], "%d-%b-%Y %H:%M")
+                return datetime.min
+            except:
+                return datetime.min
+        
+        builds.sort(key=parse_build_date, reverse=True)
         print(f"Found {len(builds)} builds")
         return builds
     except Exception as e:
@@ -1229,7 +1389,6 @@ def check_qpod_capacity(qpod, unix_id, password):
 
 @app.route("/")
 def index():
-    from datetime import datetime
     return render_template_string(
         HTML_TEMPLATE,
         ssh_domain=SSH_DOMAIN,
@@ -1642,8 +1801,6 @@ def handle_disconnect():
 
 
 if __name__ == "__main__":
-    from datetime import datetime
-
     print("=" * 60)
     print("🚀 Launch Setup from OVA Image")
     print(f"© HPE - {datetime.now().year}")
