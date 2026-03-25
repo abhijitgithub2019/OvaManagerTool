@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OVA Build Manager</title>
+
+    <!-- All dependencies from CDN - NO installation needed -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .credentials-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border: 2px solid #e9ecef;
+        }
+
+        .credentials-section h2 {
+            color: #495057;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .input-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .input-wrapper {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .input-wrapper label {
+            margin-bottom: 5px;
+            color: #495057;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+
+        .input-wrapper input,
+        .input-wrapper select {
+            padding: 12px;
+            border: 2px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            font-size: 1em;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .builds-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .builds-table thead {
+            background: #495057;
+            color: white;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .builds-table th {
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .builds-table td {
+            padding: 15px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .builds-table tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        .table-wrapper {
+            max-height: 500px;
+            overflow-y: auto;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+        }
+
+        .build-number {
+            font-family: 'Courier New', monospace;
+            color: #495057;
+            font-weight: 600;
+        }
+
+        .epic-version {
+            color: #28a745;
+            font-weight: 600;
+            background: #d4edda;
+            padding: 5px 10px;
+            border-radius: 4px;
+            display: inline-block;
+            min-width: 120px;
+            text-align: center;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.85em;
+            display: inline-block;
+            min-width: 90px;
+            text-align: center;
+        }
+
+        .status-deploying {
+            background: #cce5ff;
+            color: #004085;
+            border: 1px solid #b8daff;
+            animation: pulse 2s infinite;
+        }
+
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status-none {
+            background: #f8f9fa;
+            color: #6c757d;
+            border: 1px solid #dee2e6;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.6;
+            }
+        }
+
+        .alert {
+            padding: 15px 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left: 4px solid #17a2b8;
+        }
+
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border-left: 4px solid #ffc107;
+        }
+
+        .terminal-container {
+            background: #1e1e1e;
+            border-radius: 8px;
+            margin: 20px 0;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .terminal-header {
+            background: #2d2d2d;
+            padding: 12px 20px;
+            color: #fff;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #444;
+        }
+
+        .terminal-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.95em;
+        }
+
+        .terminal-controls button {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+            font-weight: 600;
+            background: #dc3545;
+            color: white;
+        }
+
+        .terminal-body {
+            padding: 10px;
+            background: #1e1e1e;
+        }
+
+        .info-note {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+            color: #0c5460;
+        }
+
+        .setup-note {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        .setup-note h3 {
+            color: #856404;
+            margin-bottom: 15px;
+        }
+
+        .setup-note code {
+            background: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            color: #d63384;
+            font-size: 0.9em;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            background: #f8f9fa;
+            border-top: 2px solid #dee2e6;
+            color: #6c757d;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h1>🚀 OVA Build Manager</h1>
+            <p>Zero Installation - Browser SSH Terminal</p>
+        </div>
+
+        <div class="content">
+
+            <!-- OVA Repository -->
+            <div class="credentials-section">
+                <h2>📦 OVA Repository</h2>
+                <div class="input-group">
+                    <div class="input-wrapper">
+                        <label for="ova-url">Repository URL:</label>
+                        <input type="text" id="ova-url" value="http://storage1.qnc.kanlab.jnpr.net/ova/">
+                    </div>
+                </div>
+                <button class="btn btn-success" onclick="loadBuilds()" style="margin-top: 15px;">🔄 Load Builds</button>
+                <button class="btn btn-success" onclick="testInternet()" style="margin-top: 15px;">Internet</button>
+            </div>
+
+            <!-- SSH Configuration -->
+            <div class="credentials-section">
+                <h2>🔐 SSH Credentials</h2>
+                <div class="input-group">
+                    <div class="input-wrapper">
+                        <label for="unix-id">Unix ID:</label>
+                        <input type="text" id="unix-id" placeholder="Your Unix ID">
+                    </div>
+                    <div class="input-wrapper">
+                        <label for="password">Password:</label>
+                        <div style="position: relative;">
+                            <input type="password" id="password" placeholder="Your password"
+                                style="padding-right: 45px;">
+                            <button type="button" onclick="togglePassword()"
+                                style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); background: transparent; border: none; cursor: pointer; font-size: 1.2em; padding: 5px 10px;">
+                                <span id="password-toggle-icon">👁️</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="input-wrapper">
+                        <label for="qpod-select">QPod:</label>
+                        <select id="qpod-select">
+                            <option value="">Choose QPod...</option>
+                            <option value="q-pod30-vmm">q-pod30-vmm</option>
+                            <option value="q-pod32-vmm">q-pod32-vmm</option>
+                            <option value="q-pod36-vmm">q-pod36-vmm</option>
+                            <option value="q-pod38-vmm">q-pod38-vmm</option>
+                        </select>
+                    </div>
+                    <div class="input-wrapper">
+                        <label for="profile-version">Profile Version:</label>
+                        <select id="profile-version">
+                            <option value="2.7.0" selected>2.7.0</option>
+                            <option value="2.8.0">2.8.0</option>
+                            <option value="2.9.0">2.9.0</option>
+                            <option value="3.0.0">3.0.0</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="alert" id="alert"></div>
+
+            <!-- Search -->
+            <div style="margin: 20px 0;">
+                <input type="text" id="build-search" placeholder="🔍 Search builds..." oninput="filterBuilds()"
+                    style="width: 100%; padding: 12px; border: 2px solid #dee2e6; border-radius: 6px; font-size: 1em;" />
+            </div>
+
+            <!-- Loading -->
+            <div class="loading" id="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Loading builds...</p>
+            </div>
+
+            <!-- Builds Table -->
+            <div id="builds-container" style="display: none;">
+                <div class="table-wrapper">
+                    <table class="builds-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 25%;">Build Number</th>
+                                <th style="width: 15%;">Date</th>
+                                <th style="width: 15%;">EPIC Version</th>
+                                <th style="width: 15%;">Status</th>
+                                <th style="width: 30%;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="builds-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- SSH Terminals -->
+            <div id="terminals-container"></div>
+
+        </div>
+
+        <div class="footer">
+            <p>© HPE <span id="current-year"></span> | Zero Installation Browser SSH</p>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const SSH_DOMAIN = 'englab.juniper.net';
+        const SETUP_SCRIPT = '/homes/jtsai/full_setup.sh';
+        const SETUP_PROFILE_BASE = 'basicDemo-eop:profile_daily-davinci_eop_dev_release_{version}_vmm_3.0';
+        const WEBSSH_URL = 'ws://localhost:8022';
+
+        // State
+        let builds = [];
+        let buildStatuses = {};
+        let terminals = [];
+        const testInternet = async () => {
+            try {
+                console.log('Testing Google...');
+                const response = await fetch('https://www.google.com');
+                console.log('Google works:', response.status);
+            } catch (error) {
+                console.error('No internet:', error);
+            }
+        };
+
+        document.getElementById('current-year').textContent = new Date().getFullYear();
+
+        // Load saved statuses
+        function loadBuildStatuses() {
+            const stored = localStorage.getItem('buildStatuses');
+            if (stored) {
+                try { buildStatuses = JSON.parse(stored); } catch (e) { }
+            }
+        }
+        loadBuildStatuses();
+
+        function saveBuildStatuses() {
+            localStorage.setItem('buildStatuses', JSON.stringify(buildStatuses));
+        }
+
+        function getBuildStatus(buildName) {
+            return buildStatuses[buildName] || { status: 'none' };
+        }
+
+        function setBuildStatus(buildName, status) {
+            buildStatuses[buildName] = { status, timestamp: new Date().toISOString() };
+            saveBuildStatuses();
+            updateBuildRow(buildName);
+        }
+
+        function updateBuildRow(buildName) {
+            const row = document.querySelector(`tr[data-build="${buildName}"]`);
+            if (row) row.cells[3].innerHTML = getStatusBadge(getBuildStatus(buildName).status);
+        }
+
+        function getStatusBadge(status) {
+            const badges = {
+                'none': '<span class="status-badge status-none">Ready</span>',
+                'deploying': '<span class="status-badge status-deploying">🚀 Deploying</span>',
+                'success': '<span class="status-badge status-success">✅ Success</span>',
+                'failed': '<span class="status-badge status-failed">❌ Failed</span>'
+            };
+            return badges[status] || badges.none;
+        }
+
+        function togglePassword() {
+            const input = document.getElementById('password');
+            const icon = document.getElementById('password-toggle-icon');
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.textContent = '🙈';
+            } else {
+                input.type = 'password';
+                icon.textContent = '👁️';
+            }
+        }
+
+        function showAlert(message, type) {
+            const alert = document.getElementById('alert');
+            alert.textContent = message;
+            alert.className = `alert alert-${type} show`;
+            setTimeout(() => alert.className = 'alert', 8000);
+        }
+
+        async function checkGateway() {
+            const statusEl = document.getElementById('gateway-status');
+            statusEl.textContent = 'Checking...';
+            statusEl.style.color = '#856404';
+
+            try {
+                const ws = new WebSocket(WEBSSH_URL);
+                const timeout = setTimeout(() => {
+                    ws.close();
+                    statusEl.textContent = 'Not Running ✗';
+                    statusEl.style.color = '#721c24';
+                    showAlert('Gateway not running. Please run: pip install webssh && webssh --port=8022', 'warning');
+                }, 3000);
+
+                ws.onopen = () => {
+                    clearTimeout(timeout);
+                    statusEl.textContent = 'Running ✓';
+                    statusEl.style.color = '#155724';
+                    showAlert('✅ Gateway is running!', 'success');
+                    ws.close();
+                };
+
+                ws.onerror = () => {
+                    clearTimeout(timeout);
+                    statusEl.textContent = 'Not Running ✗';
+                    statusEl.style.color = '#721c24';
+                };
+            } catch (error) {
+                statusEl.textContent = 'Error ✗';
+                statusEl.style.color = '#721c24';
+            }
+        }
+
+        async function loadBuilds() {
+            const loading = document.getElementById('loading');
+            const container = document.getElementById('builds-container');
+            const ovaUrl = document.getElementById('ova-url').value.trim();
+
+            loading.style.display = 'block';
+            container.style.display = 'none';
+
+            try {
+                const response = await fetch(ovaUrl);
+                const html = await response.text();
+                builds = parseBuilds(html, ovaUrl);
+
+                loading.style.display = 'none';
+                container.style.display = 'block';
+                renderBuilds();
+                showAlert(`✅ Loaded ${builds.length} builds`, 'success');
+                fetchEpicVersions();
+            } catch (error) {
+                loading.style.display = 'none';
+                showAlert('Failed to load builds: ' + error.message, 'error');
+            }
+        }
+
+        function parseBuilds(html, baseUrl) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const builds = [];
+            const pattern = /(develop\.[^\s]+\/)\s+(\d{2}-[A-Za-z]{3}-\d{4}\s+\d{2}:\d{2})/;
+            const lines = doc.body.textContent.split('\n');
+
+            for (const line of lines) {
+                if (line.includes('develop.')) {
+                    const match = line.match(pattern);
+                    if (match) {
+                        builds.push({
+                            name: match[1].replace('/', ''),
+                            url: baseUrl + match[1],
+                            date: match[2],
+                            epic_version: 'Loading...'
+                        });
+                    }
+                }
+            }
+
+            builds.sort((a, b) => b.name.localeCompare(a.name));
+            return builds;
+        }
+
+        async function fetchEpicVersions() {
+            for (const build of builds) {
+                try {
+                    const response = await fetch(build.url + 'images.txt');
+                    const content = await response.text();
+                    const match = content.match(/mistsys\/epic-ui:([0-9.]+(?:-r[0-9.]+)?)/i);
+                    build.epic_version = match ? match[1] : 'Unknown';
+                    updateBuildEpicVersion(build.name, build.epic_version);
+                } catch (error) {
+                    build.epic_version = 'Error';
+                }
+            }
+        }
+
+        function updateBuildEpicVersion(buildName, version) {
+            const row = document.querySelector(`tr[data-build="${buildName}"]`);
+            if (row) row.cells[2].querySelector('.epic-version').textContent = version;
+        }
+
+        function renderBuilds() {
+            const tbody = document.getElementById('builds-tbody');
+            tbody.innerHTML = '';
+
+            builds.forEach(build => {
+                const row = tbody.insertRow();
+                row.setAttribute('data-build', build.name);
+                row.innerHTML = `
+                    <td class="build-number">${build.name}</td>
+                    <td>${build.date}</td>
+                    <td><span class="epic-version">${build.epic_version}</span></td>
+                    <td>${getStatusBadge(getBuildStatus(build.name).status)}</td>
+                    <td>
+                        <button class="btn btn-primary" onclick="deployBuild('${build.name}')">
+                            🖥️ Deploy via SSH
+                        </button>
+                    </td>
+                `;
+            });
+        }
+
+        function filterBuilds() {
+            const search = document.getElementById('build-search').value.toLowerCase();
+            const rows = document.querySelectorAll('#builds-tbody tr');
+            rows.forEach(row => {
+                row.style.display = row.textContent.toLowerCase().includes(search) ? '' : 'none';
+            });
+        }
+
+        function deployBuild(buildName) {
+            const unixId = document.getElementById('unix-id').value.trim();
+            const password = document.getElementById('password').value;
+            const qpod = document.getElementById('qpod-select').value;
+            const profileVersion = document.getElementById('profile-version').value;
+
+            if (!unixId || !password) {
+                showAlert('⚠️ Please enter Unix ID and password', 'warning');
+                return;
+            }
+
+            if (!qpod) {
+                showAlert('⚠️ Please select a QPod', 'warning');
+                return;
+            }
+
+            openSSHTerminal(buildName, unixId, password, qpod, profileVersion);
+        }
+
+        function openSSHTerminal(buildName, unixId, password, qpod, profileVersion) {
+            const terminalId = 'term-' + Date.now();
+            const sshHost = `${qpod}.${SSH_DOMAIN}`;
+            const setupProfile = SETUP_PROFILE_BASE.replace('{version}', profileVersion);
+            const setupCommand = `${SETUP_SCRIPT} -n ${setupProfile} -o __davinciVersion__=${buildName}`;
+
+            // Create terminal UI
+            const container = document.getElementById('terminals-container');
+            const terminalDiv = document.createElement('div');
+            terminalDiv.className = 'terminal-container';
+            terminalDiv.id = terminalId;
+            terminalDiv.innerHTML = `
+                <div class="terminal-header">
+                    <div class="terminal-title">🖥️ ${buildName} @ ${qpod}</div>
+                    <div class="terminal-controls">
+                        <button onclick="closeTerminal('${terminalId}')">✕ Close</button>
+                    </div>
+                </div>
+                <div class="terminal-body">
+                    <div id="${terminalId}-xterm"></div>
+                </div>
+            `;
+            container.appendChild(terminalDiv);
+
+            // Create xterm terminal
+            const term = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                theme: {
+                    background: '#1e1e1e',
+                    foreground: '#f0f0f0',
+                    cursor: '#f0f0f0'
+                },
+                cols: 120,
+                rows: 30
+            });
+
+            const fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.loadAddon(new WebLinksAddon.WebLinksAddon());
+            term.open(document.getElementById(`${terminalId}-xterm`));
+            fitAddon.fit();
+
+            terminalDiv.scrollIntoView({ behavior: 'smooth' });
+
+            // Banner
+            term.writeln('\x1b[1;36m╔══════════════════════════════════════════════════════╗\x1b[0m');
+            term.writeln('\x1b[1;36m║       OVA Build Manager - Browser SSH Terminal      ║\x1b[0m');
+            term.writeln('\x1b[1;36m╚══════════════════════════════════════════════════════╝\x1b[0m\r\n');
+            term.writeln(`\x1b[1;33m📦 Build:\x1b[0m ${buildName}`);
+            term.writeln(`\x1b[1;33m🔌 Host:\x1b[0m ${sshHost}`);
+            term.writeln(`\x1b[1;33m👤 User:\x1b[0m ${unixId}\r\n`);
+            term.writeln('\x1b[90m' + '─'.repeat(60) + '\x1b[0m\r\n');
+
+            // Connect via WebSocket
+            term.writeln('\x1b[1;32m✓ Connecting to SSH gateway...\x1b[0m\r\n');
+
+            const ws = new WebSocket(WEBSSH_URL);
+
+            ws.onopen = () => {
+                term.writeln('\x1b[1;32m✓ Gateway connected\x1b[0m');
+                term.writeln('\x1b[1;33m⏳ Establishing SSH connection...\x1b[0m\r\n');
+
+                // Send auth
+                ws.send(JSON.stringify({
+                    hostname: sshHost,
+                    port: 22,
+                    username: unixId,
+                    password: password
+                }));
+
+                setBuildStatus(buildName, 'deploying');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    if (data.status === 'connected') {
+                        term.writeln('\x1b[1;32m✓ SSH Connected!\x1b[0m\r\n');
+                        term.writeln('\x1b[1;36m📝 Executing deployment...\x1b[0m\r\n');
+
+                        setTimeout(() => {
+                            ws.send(JSON.stringify({
+                                data: setupCommand + '\r'
+                            }));
+                        }, 1000);
+                    } else if (data.data) {
+                        term.write(data.data);
+
+                        if (data.data.toLowerCase().includes('success')) {
+                            setBuildStatus(buildName, 'success');
+                        }
+                    } else if (data.error) {
+                        term.writeln(`\r\n\x1b[1;31m✗ Error: ${data.error}\x1b[0m\r\n`);
+                        setBuildStatus(buildName, 'failed');
+                    }
+                } catch (e) {
+                    term.write(event.data);
+                }
+            };
+
+            ws.onerror = () => {
+                term.writeln('\r\n\x1b[1;31m✗ Connection failed. Is webssh running?\x1b[0m\r\n');
+                showAlert('Run: pip install webssh && webssh --port=8022', 'error');
+                setBuildStatus(buildName, 'failed');
+            };
+
+            term.onData((data) => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ data: data }));
+                }
+            });
+
+            terminals.push({ id: terminalId, term, ws, buildName });
+        }
+
+        function closeTerminal(terminalId) {
+            const div = document.getElementById(terminalId);
+            if (div) div.remove();
+
+            const idx = terminals.findIndex(t => t.id === terminalId);
+            if (idx !== -1) {
+                const t = terminals[idx];
+                if (t.ws) t.ws.close();
+                if (t.term) t.term.dispose();
+                terminals.splice(idx, 1);
+            }
+        }
+    </script>
+</body>
+
+</html>

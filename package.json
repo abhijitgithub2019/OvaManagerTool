@@ -1,0 +1,29 @@
+{
+  "name": "ova-build-manager-ws-gateway",
+  "version": "1.0.0",
+  "description": "WebSocket-to-SSH Gateway for OVA Build Manager HTML version",
+  "main": "ws-ssh-gateway.js",
+  "scripts": {
+    "start": "node ws-ssh-gateway.js",
+    "dev": "nodemon ws-ssh-gateway.js"
+  },
+  "keywords": [
+    "websocket",
+    "ssh",
+    "gateway",
+    "terminal",
+    "ova"
+  ],
+  "author": "OVA Build Manager",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.14.2",
+    "ssh2": "^1.15.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
