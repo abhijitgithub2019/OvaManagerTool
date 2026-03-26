@@ -15,7 +15,7 @@ import paramiko
 from flask_socketio import SocketIO, emit
 import threading
 import json
-from markupsafe import Markup 
+from markupsafe import Markup
 from datetime import datetime
 
 app = Flask(__name__)
@@ -24,7 +24,12 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Configuration
 OVA_BASE_URL = "http://storage1.qnc.kanlab.jnpr.net/ova/"
-QPODS = ["q-pod30-vmm", "q-pod32-vmm", "q-pod36-vmm", "q-pod38-vmm"]  # Single source of truth
+QPODS = [
+    "q-pod30-vmm",
+    "q-pod32-vmm",
+    "q-pod36-vmm",
+    "q-pod38-vmm",
+]  # Single source of truth
 SSH_DOMAIN = "englab.juniper.net"
 SETUP_SCRIPT = "/homes/jtsai/full_setup.sh"
 SETUP_PROFILE_BASE = (
@@ -330,9 +335,10 @@ HTML_TEMPLATE = """
                     <select id="qpod-select" style="width:100%;padding:12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;">
                         <option value="">Choose a QPod...</option>
                     </select>
-                    <button class="refresh-btn" onclick="connectToQpod()" style="margin-top:10px;background:#17a2b8;">
-                        🔌 Connect to QPod (SSH Only)
-                    </button>
+                <div id="qpod-alert" style="display:none;margin-top:10px;padding:12px 16px;border-radius:6px;background:#f8d7da;color:#721c24;border-left:4px solid #dc3545;font-weight:600;"></div>
+                <button class="refresh-btn" onclick="connectToQpod()" style="margin-top:10px;background:#17a2b8;">
+                    🔌 Connect to QPod (SSH Only)
+                </button>
                 </div>
 
                 <div class="info-note" style="margin-top:15px;">
@@ -374,7 +380,10 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <button class="refresh-btn" onclick="loadBuilds()">🔄 Refresh Builds</button>
+<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+    <button class="refresh-btn" style="margin-bottom:0;" onclick="loadBuilds()">🔄 Refresh Builds</button>
+    <button class="refresh-btn" style="margin-bottom:0;background:#dc3545;" onclick="clearAllStatuses()">🗑️ Clear All Statuses</button>
+</div>
 
         <!-- Search -->
         <div style="margin-bottom:15px;">
@@ -598,6 +607,18 @@ function loadBuildStatuses() {
     const s = localStorage.getItem('buildStatuses');
     if (s) { try { buildStatuses = JSON.parse(s); } catch(e) { buildStatuses = {}; } }
 }
+
+function clearAllStatuses() {
+    if (!confirm('Clear all deployment statuses?')) return;
+    buildStatuses = {};
+    saveBuildStatuses();
+    document.querySelectorAll('.status-cell').forEach(cell => {
+        const buildName = cell.closest('tr')?.getAttribute('data-build-name');
+        if (buildName) cell.innerHTML = getStatusHTML(buildName);
+    });
+    showAlert('All statuses cleared', 'info');
+}
+
 function saveBuildStatuses() { localStorage.setItem('buildStatuses', JSON.stringify(buildStatuses)); }
 function getBuildStatus(n) { return buildStatuses[n] || { status:'none', timestamp:null, qpod:null, progress:'' }; }
 function setBuildStatus(buildName, status, qpod, progress) {
@@ -891,9 +912,27 @@ function filterBuilds() {
 function createBuild(index) {
     const unixId   = document.getElementById('unix-id').value.trim();
     const password = document.getElementById('password').value;
-    const qpod     = document.getElementById('qpod-select').value;
-    if (!unixId || !password) { showAlert('Please enter Unix ID and Password', 'error'); return; }
-    if (!qpod) { showAlert('Please check capacities and select a QPod first', 'error'); return; }
+    const sel      = document.getElementById('qpod-select');
+    const qpod     = sel.value;
+
+    if (!unixId || !password) { 
+        showAlert('Please enter Unix ID and Password', 'error'); 
+        return; 
+    }
+
+    if (!qpod) {
+        const selectorSection = document.getElementById('qpod-selector-section');
+        if (selectorSection.style.display === 'none') {
+            showAlert('Please check QPod capacities first', 'error');
+            document.getElementById('capacity-section').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+            showQpodAlert('Please select a QPod from the dropdown below');
+            selectorSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        return;
+    }
+
+    hideQpodAlert();
     executeInTerminal(unixId, password, qpod, builds[index].name);
 }
 
@@ -982,6 +1021,13 @@ function openBlankTerminal() {
     });
 
     showAlert('Interactive terminal opened!', 'success');
+setTimeout(() => {
+    const container = document.getElementById(terminalId + '-container');
+    if (container) {
+        container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        term.focus();
+    }
+}, 100);
 }
 
 function connectToQpod() {
@@ -1145,6 +1191,22 @@ async function checkCapacities() {
     }
 }
 
+function showQpodAlert(msg) {
+    const el = document.getElementById('qpod-alert');
+    if (!el) return;
+    el.textContent = '⚠️ ' + msg;
+    el.style.display = 'block';
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    el.style.animation = 'none';
+    el.offsetHeight; // reflow
+    el.style.animation = 'shake 0.5s';
+}
+
+function hideQpodAlert() {
+    const el = document.getElementById('qpod-alert');
+    if (el) el.style.display = 'none';
+}
+
 function showAlert(msg, type) {
     const a = document.getElementById('alert');
     a.textContent = msg; 
@@ -1293,13 +1355,14 @@ def fetch_builds():
                 return datetime.min
             except:
                 return datetime.min
-        
+
         builds.sort(key=parse_build_date, reverse=True)
         print(f"Found {len(builds)} builds")
         return builds
     except Exception as e:
         print(f"Error fetching builds: {e}")
         import traceback
+
         traceback.print_exc()
         return {"error": str(e)}
 
@@ -1326,7 +1389,7 @@ def fetch_image_version(build_url, image_key):
             if colon_pos == -1:
                 continue
             image_path = line[:colon_pos].lower()
-            version = line[colon_pos + 1:]
+            version = line[colon_pos + 1 :]
 
             if (
                 image_path == key_lower
@@ -1387,6 +1450,7 @@ def check_qpod_capacity(qpod, unix_id, password):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+
 @app.route("/")
 def index():
     return render_template_string(
@@ -1394,7 +1458,9 @@ def index():
         ssh_domain=SSH_DOMAIN,
         setup_script=SETUP_SCRIPT,
         current_year=datetime.now().year,
-        qpods_json=Markup(json.dumps(QPODS)), # ← injects QPODS into JS as DEFAULT_QPODS
+        qpods_json=Markup(
+            json.dumps(QPODS)
+        ),  # ← injects QPODS into JS as DEFAULT_QPODS
     )
 
 
@@ -1422,7 +1488,9 @@ def check_capacity():
         return jsonify({"error": "Unix ID and password required"}), 400
 
     # Merge default QPODS (server-side) with custom ones from frontend
-    all_qpods = list(dict.fromkeys(QPODS + custom_qpods))  # preserves order, deduplicates
+    all_qpods = list(
+        dict.fromkeys(QPODS + custom_qpods)
+    )  # preserves order, deduplicates
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1450,6 +1518,7 @@ def check_capacity():
 
 
 # ── WebSocket handlers ────────────────────────────────────────────────────────
+
 
 @socketio.on("execute_command")
 def handle_execute_command(data):
