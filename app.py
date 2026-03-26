@@ -281,10 +281,10 @@ HTML_TEMPLATE = """
             <h2>SSH Credentials</h2>
             <div class="input-group">
                 <div class="input-wrapper">
-                    <label for="unix-id">Unix ID:</label>
+                    <label for="unix-id">Unix ID(User Name):</label>
               <input type="text" id="unix-id" placeholder="Enter your Unix ID" oninput="clearCredentialAlert()">
                 </div>
-                <div class="input-wrapper">
+                    <div class="input-wrapper">
                     <label for="password">Password:</label>
                     <div style="position:relative;width:100%;display:block;">
                         <input type="password" id="password" placeholder="Enter your password" style="width:100%;padding:12px 45px 12px 12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;box-sizing:border-box;" oninput="clearCredentialAlert()">
@@ -292,6 +292,11 @@ HTML_TEMPLATE = """
                             <span id="password-toggle-icon">👁️</span>
                         </button>
                     </div>
+                    <a href="https://junipernetworks.service-now.com/sp?id=sc_category&sys_id=149f22481bc86c50abd7db1fdc4bcbc2&catalog_id=-1"
+                       target="_blank"
+                       style="font-size:0.82em;color:#667eea;text-decoration:none;margin-top:5px;display:inline-block;">
+                        🔑 Forgot Password?
+                    </a>
                 </div>
             </div>
             <div style="margin-top:15px;display:flex;gap:10px;flex-wrap:wrap;">
@@ -1452,12 +1457,50 @@ def fetch_image_version(build_url, image_key):
         return "Error"
 
 
+def make_ssh_client(ssh_host, unix_id, password, timeout=8):
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    # Detect supported auth methods without wasting a full attempt
+    transport = paramiko.Transport((ssh_host, 22))
+    transport.connect()
+    try:
+        allowed = transport.auth_none(unix_id)  # returns list of allowed methods
+    except paramiko.BadAuthenticationType as e:
+        allowed = e.allowed_types
+    transport.close()
+
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    if "password" in allowed:
+        ssh.connect(
+            ssh_host,
+            username=unix_id,
+            password=password,
+            timeout=timeout,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+    else:
+        # keyboard-interactive
+        transport = paramiko.Transport((ssh_host, 22))
+        transport.connect()
+        transport.auth_interactive_dumb(
+            unix_id,
+            lambda title, instructions, prompts: [password] * len(prompts),
+        )
+        ssh._transport = transport
+
+    return ssh
+
+
 def check_qpod_capacity(qpod, unix_id, password):
     ssh_host = f"{qpod}.{SSH_DOMAIN}"
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(ssh_host, username=unix_id, password=password, timeout=15)
+        ssh = make_ssh_client(ssh_host, unix_id, password, timeout=8)
         _, stdout, stderr = ssh.exec_command("vmm capacity -g vmm-default")
         output = stdout.read().decode("utf-8")
         error = stderr.read().decode("utf-8")
@@ -1543,7 +1586,7 @@ def check_capacity():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     capacities = []
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=len(all_qpods)) as executor:
         future_to_qpod = {
             executor.submit(check_qpod_capacity, q, unix_id, password): q
             for q in all_qpods
@@ -1650,7 +1693,8 @@ def handle_connect_ssh(data):
             socketio.emit(
                 "output", {"data": f"Connecting to {ssh_host}...\r\n"}, room=session_id
             )
-            ssh.connect(ssh_host, username=unix_id, password=password, timeout=30)
+            ssh = make_ssh_client(ssh_host, unix_id, password, timeout=30)
+
             socketio.emit("output", {"data": "Connected!\r\n\r\n"}, room=session_id)
             channel = ssh.invoke_shell()
             active_sessions[session_id] = {"ssh": ssh, "channel": channel}
