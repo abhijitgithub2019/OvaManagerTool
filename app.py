@@ -282,12 +282,12 @@ HTML_TEMPLATE = """
             <div class="input-group">
                 <div class="input-wrapper">
                     <label for="unix-id">Unix ID:</label>
-                    <input type="text" id="unix-id" placeholder="Enter your Unix ID">
+              <input type="text" id="unix-id" placeholder="Enter your Unix ID" oninput="clearCredentialAlert()">
                 </div>
                 <div class="input-wrapper">
                     <label for="password">Password:</label>
                     <div style="position:relative;width:100%;display:block;">
-                        <input type="password" id="password" placeholder="Enter your password" style="width:100%;padding:12px 45px 12px 12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;box-sizing:border-box;">
+                        <input type="password" id="password" placeholder="Enter your password" style="width:100%;padding:12px 45px 12px 12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;box-sizing:border-box;" oninput="clearCredentialAlert()">
                         <button type="button" onclick="togglePassword()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:transparent;border:none;cursor:pointer;font-size:1.1em;padding:0;line-height:1;">
                             <span id="password-toggle-icon">👁️</span>
                         </button>
@@ -296,7 +296,7 @@ HTML_TEMPLATE = """
             </div>
             <div style="margin-top:15px;display:flex;gap:10px;flex-wrap:wrap;">
                 <button class="refresh-btn" style="margin-bottom:0;" onclick="checkCapacities()">🔍 Check QPod Capacities</button>
-                <button class="refresh-btn" style="margin-bottom:0;background:#28a745;" onclick="openBlankTerminal()">💻 Just Open Terminal</button>
+                <button class="refresh-btn" style="margin-bottom:0;background:#28a745;" onclick="openBlankTerminal()">💻 Just Connect to QPod</button>
             </div>
         </div>
         <div class="alert" id="alert"></div>
@@ -332,9 +332,9 @@ HTML_TEMPLATE = """
                 <!-- QPod Selector -->
                 <div id="qpod-selector-section" style="display:none;margin-top:15px;">
                     <label style="font-weight:600;color:#495057;margin-bottom:10px;display:block;">Select QPod for Deployment:</label>
-                    <select id="qpod-select" style="width:100%;padding:12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;">
-                        <option value="">Choose a QPod...</option>
-                    </select>
+                   <select id="qpod-select" style="width:100%;padding:12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;" onchange="if(this.value) hideQpodAlert();">
+    <option value="">Choose a QPod...</option>
+</select>
                 <div id="qpod-alert" style="display:none;margin-top:10px;padding:12px 16px;border-radius:6px;background:#f8d7da;color:#721c24;border-left:4px solid #dc3545;font-weight:600;"></div>
                 <button class="refresh-btn" onclick="connectToQpod()" style="margin-top:10px;background:#17a2b8;">
                     🔌 Connect to QPod (SSH Only)
@@ -518,7 +518,6 @@ const PRESETS = [
     { key: 'alert-manager',   label: 'Alert Manager' },
     { key: 'agatha',          label: 'Agatha' },
     { key: 'paa/orchestrator',label: 'Orchestrator' },
-    { key: 'northstar-docker-local/common-utils', label: 'Common Utils' },
 ];
 
 let trackedCols = [];
@@ -982,52 +981,95 @@ function makeTerminal(terminalId, titleHtml) {
 }
 
 function openBlankTerminal() {
-    const terminalId = 'terminal-' + Date.now();
-    const { term } = makeTerminal(terminalId, '💻 Interactive Terminal');
-    term.writeln('\\x1b[1;36m💻 Interactive Terminal\\x1b[0m');
-    term.writeln('\\x1b[90m' + '='.repeat(60) + '\\x1b[0m');
-    term.writeln('\\x1b[1;33mType any command and press Enter.\\x1b[0m');
-    term.writeln('  \\x1b[32mssh user@q-pod30-vmm.englab.juniper.net\\x1b[0m');
-    term.writeln('\\x1b[90m' + '='.repeat(60) + '\\x1b[0m');
-    term.writeln('');
-    term.write('$ ');
+    const unixId   = document.getElementById('unix-id').value.trim();
+    const password = document.getElementById('password').value;
 
-    const socket = io();
-    terminalSockets.push({ id: terminalId, socket });
-
-    let commandBuffer = '', isExecuting = false;
-
-    socket.on('output', msg => { term.write(msg.data); });
-    socket.on('command_ended', () => { isExecuting = false; term.write('\\r\\n$ '); commandBuffer = ''; });
-    socket.on('error', msg => {
-        term.writeln('\\r\\n\\x1b[1;31mError: ' + msg.error + '\\x1b[0m\\r\\n');
-        isExecuting = false; term.write('$ '); commandBuffer = '';
-    });
-
-    term.onData(data => {
-        if (isExecuting) { socket.emit('input', { data }); return; }
-        const code = data.charCodeAt(0);
-        if (data === '\\r' || data === '\\n') {
-            term.write('\\r\\n');
-            if (commandBuffer.trim()) { isExecuting = true; socket.emit('execute_command', { command: commandBuffer.trim() }); }
-            else { term.write('$ '); }
-            commandBuffer = '';
-        } else if (code === 127 || code === 8) {
-            if (commandBuffer.length > 0) { commandBuffer = commandBuffer.slice(0,-1); term.write('\\b \\b'); }
-        } else if (code === 3) {
-            if (isExecuting) socket.emit('kill_session');
-            term.write('^C\\r\\n$ '); commandBuffer = ''; isExecuting = false;
-        } else if (code >= 32 && code < 127) { commandBuffer += data; term.write(data); }
-    });
-
-    showAlert('Interactive terminal opened!', 'success');
-setTimeout(() => {
-    const container = document.getElementById(terminalId + '-container');
-    if (container) {
-        container.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        term.focus();
+    if (!unixId || !password) {
+        showAlert('Please enter Unix ID and Password before opening a terminal', 'error');
+        document.getElementById('unix-id').focus();
+        return;
     }
-}, 100);
+
+    const qpod = document.getElementById('qpod-select').value;
+
+    if (qpod) {
+        // QPod already selected — open SSH terminal directly
+        launchSSHTerminal(unixId, password, qpod);
+        return;
+    }
+
+    // No QPod selected — show inline picker modal
+    const existingModal = document.getElementById('qpod-picker-modal');
+    if (existingModal) existingModal.remove();
+
+    const allQpods = getAllQpods();
+    const modal = document.createElement('div');
+    modal.id = 'qpod-picker-modal';
+    modal.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 9999;
+    `;
+    modal.innerHTML = `
+        <div style="background:white;border-radius:12px;padding:30px;min-width:340px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.35);">
+            <h3 style="margin:0 0 6px;color:#495057;font-size:1.2em;">💻 Open Terminal</h3>
+            <p style="margin:0 0 20px;color:#6c757d;font-size:0.9em;">Select a QPod to SSH into:</p>
+            <select id="qpod-picker-select" style="width:100%;padding:11px 12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;margin-bottom:20px;box-sizing:border-box;">
+                <option value="">Choose a QPod...</option>
+                ${allQpods.map(q => `<option value="${escapeHtml(q)}">${escapeHtml(q)}</option>`).join('')}
+            </select>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+                <button onclick="document.getElementById('qpod-picker-modal').remove()"
+                    style="padding:10px 20px;border:2px solid #dee2e6;border-radius:6px;background:white;cursor:pointer;font-weight:600;color:#495057;">
+                    Cancel
+                </button>
+                <button onclick="confirmQpodPicker()"
+                    style="padding:10px 20px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">
+                    Connect
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Close on backdrop click
+    modal.addEventListener('click', e => {
+        if (e.target === modal) modal.remove();
+    });
+
+    // Connect on Enter key
+    modal.addEventListener('keydown', e => {
+        if (e.key === 'Enter') confirmQpodPicker();
+        if (e.key === 'Escape') modal.remove();
+    });
+
+    document.body.appendChild(modal);
+    document.getElementById('qpod-picker-select').focus();
+}
+
+function confirmQpodPicker() {
+    const sel   = document.getElementById('qpod-picker-select');
+    const qpod  = sel ? sel.value : '';
+    if (!qpod) {
+        sel.style.borderColor = '#dc3545';
+        setTimeout(() => sel.style.borderColor = '#dee2e6', 1500);
+        return;
+    }
+    document.getElementById('qpod-picker-modal').remove();
+
+    const unixId   = document.getElementById('unix-id').value.trim();
+    const password = document.getElementById('password').value;
+    launchSSHTerminal(unixId, password, qpod);
+}
+
+function launchSSHTerminal(unixId, password, qpod) {
+    openTerminalForSSH(unixId, password, qpod);
+    setTimeout(() => {
+        const allContainers = document.querySelectorAll('.terminal-container');
+        const last = allContainers[allContainers.length - 1];
+        if (last) {
+            last.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }, 150);
 }
 
 function connectToQpod() {
@@ -1205,6 +1247,12 @@ function showQpodAlert(msg) {
 function hideQpodAlert() {
     const el = document.getElementById('qpod-alert');
     if (el) el.style.display = 'none';
+}
+
+function clearCredentialAlert() {
+    const unixId   = document.getElementById('unix-id').value.trim();
+    const password = document.getElementById('password').value;
+    if (unixId && password) hideAlert();
 }
 
 function showAlert(msg, type) {
