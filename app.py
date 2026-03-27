@@ -3,6 +3,7 @@
 Simple OVA Build Manager with Python Backend
 Dynamic version column tracking from images.txt
 Enhanced with date sorting and validation error focusing
+Fixes: no VMM restriction, auto ssh-agent, all QPods removable
 """
 
 from flask import Flask, render_template_string, jsonify, request
@@ -183,7 +184,6 @@ HTML_TEMPLATE = """
             transition: all 0.2s; user-select: none;
         }
         .col-tag.active { border-color: #667eea; background: #eef0ff; color: #4a5fc1; }
-        .col-tag.locked { cursor: default; border-color: #adb5bd; background: #e9ecef; color: #495057; }
         .col-tag .col-remove {
             background: #dc3545; color: white; border: none; border-radius: 50%;
             width: 16px; height: 16px; font-size: 0.75em; cursor: pointer;
@@ -212,9 +212,6 @@ HTML_TEMPLATE = """
         }
         .preset-chip:hover { background: #d0d7de; }
 
-        /* QPod tag locked badge */
-        .qpod-lock-icon { font-size: 0.75em; opacity: 0.6; }
-
         /* Misc buttons */
         .stop-btn { background: #dc3545; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85em; margin-left: 5px; }
         .stop-btn:hover { background: #c82333; }
@@ -224,7 +221,7 @@ HTML_TEMPLATE = """
         }
         .create-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102,126,234,0.4); }
         .create-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .alert { 
+        .alert {
             padding: 15px 20px; border-radius: 6px; margin-bottom: 20px; display: none;
             scroll-margin-top: 20px;
         }
@@ -282,9 +279,9 @@ HTML_TEMPLATE = """
             <div class="input-group">
                 <div class="input-wrapper">
                     <label for="unix-id">Unix ID(User Name):</label>
-              <input type="text" id="unix-id" placeholder="Enter your Unix ID" oninput="clearCredentialAlert()">
+                    <input type="text" id="unix-id" placeholder="Enter your Unix ID" oninput="clearCredentialAlert()">
                 </div>
-                    <div class="input-wrapper">
+                <div class="input-wrapper">
                     <label for="password">Password:</label>
                     <div style="position:relative;width:100%;display:block;">
                         <input type="password" id="password" placeholder="Enter your password" style="width:100%;padding:12px 45px 12px 12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;box-sizing:border-box;" oninput="clearCredentialAlert()">
@@ -305,6 +302,7 @@ HTML_TEMPLATE = """
             </div>
         </div>
         <div class="alert" id="alert"></div>
+
         <!-- QPod Capacity -->
         <div id="capacity-section" style="margin-bottom:30px;">
             <div class="credentials-section">
@@ -313,15 +311,15 @@ HTML_TEMPLATE = """
                     <span class="qpod-count" id="qpod-count">0</span>
                 </h2>
 
-                <!-- QPod Tags -->
+                <!-- QPod Tags note -->
                 <div style="margin-bottom:6px;color:#6c757d;font-size:0.85em;">
-                    🔒 Default QPods are locked &nbsp;·&nbsp; Custom QPods can be removed
+                    All QPods can be removed &nbsp;·&nbsp; Add any custom QPod by name
                 </div>
                 <div class="col-tags" id="qpod-tags" style="margin-bottom:14px;min-height:36px;"></div>
 
                 <!-- Add Custom QPod -->
                 <div class="col-add-row" style="margin-bottom:20px;">
-                    <input type="text" id="custom-qpod" placeholder="Add custom QPod (e.g., q-pod40-vmm)" style="flex:1;min-width:220px;">
+                    <input type="text" id="custom-qpod" placeholder="Add QPod (e.g., q-pod40-vmm, elpod1)">
                     <button class="btn-add-col" onclick="addCustomQpod()">+ Add QPod</button>
                 </div>
 
@@ -337,13 +335,13 @@ HTML_TEMPLATE = """
                 <!-- QPod Selector -->
                 <div id="qpod-selector-section" style="display:none;margin-top:15px;">
                     <label style="font-weight:600;color:#495057;margin-bottom:10px;display:block;">Select QPod for Deployment:</label>
-                   <select id="qpod-select" style="width:100%;padding:12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;" onchange="if(this.value) hideQpodAlert();">
-    <option value="">Choose a QPod...</option>
-</select>
-                <div id="qpod-alert" style="display:none;margin-top:10px;padding:12px 16px;border-radius:6px;background:#f8d7da;color:#721c24;border-left:4px solid #dc3545;font-weight:600;"></div>
-                <button class="refresh-btn" onclick="connectToQpod()" style="margin-top:10px;background:#17a2b8;">
-                    🔌 Connect to QPod (SSH Only)
-                </button>
+                    <select id="qpod-select" style="width:100%;padding:12px;border:2px solid #dee2e6;border-radius:6px;font-size:1em;" onchange="if(this.value) hideQpodAlert();">
+                        <option value="">Choose a QPod...</option>
+                    </select>
+                    <div id="qpod-alert" style="display:none;margin-top:10px;padding:12px 16px;border-radius:6px;background:#f8d7da;color:#721c24;border-left:4px solid #dc3545;font-weight:600;"></div>
+                    <button class="refresh-btn" onclick="connectToQpod()" style="margin-top:10px;background:#17a2b8;">
+                        🔌 Connect to QPod (SSH Only)
+                    </button>
                 </div>
 
                 <div class="info-note" style="margin-top:15px;">
@@ -352,7 +350,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
         </div>
-
 
         <!-- Profile Release Version -->
         <div class="col-manager" style="margin-bottom:20px;">
@@ -372,11 +369,9 @@ HTML_TEMPLATE = """
             <h2>📦 Version Columns <small style="font-weight:400;color:#6c757d;font-size:0.85em;">— choose which image versions to show in the table</small></h2>
 
             <div style="margin-bottom:8px;color:#6c757d;font-size:0.85em;">Quick add:</div>
-            <div class="preset-chips" id="preset-chips">
-                <!-- filled by JS -->
-            </div>
+            <div class="preset-chips" id="preset-chips"></div>
 
-            <div class="col-tags" id="col-tags"><!-- filled by JS --></div>
+            <div class="col-tags" id="col-tags"></div>
 
             <div class="col-add-row">
                 <input type="text" id="new-col-key" placeholder="Image key, e.g. papi  or  mistsys/alert-manager">
@@ -385,10 +380,10 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
-    <button class="refresh-btn" style="margin-bottom:0;" onclick="loadBuilds()">🔄 Refresh Builds</button>
-    <button class="refresh-btn" style="margin-bottom:0;background:#dc3545;" onclick="clearAllStatuses()">🗑️ Clear All Statuses</button>
-</div>
+        <div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+            <button class="refresh-btn" style="margin-bottom:0;" onclick="loadBuilds()">🔄 Refresh Builds</button>
+            <button class="refresh-btn" style="margin-bottom:0;background:#dc3545;" onclick="clearAllStatuses()">🗑️ Clear All Statuses</button>
+        </div>
 
         <!-- Search -->
         <div style="margin-bottom:15px;">
@@ -426,15 +421,34 @@ const SETUP_SCRIPT = '{{ setup_script }}';
 const DEFAULT_QPODS = {{ qpods_json }};
 
 let builds = [];
-let customQpods = [];   // user-added QPods (persisted in localStorage)
+let customQpods = [];
+let removedDefaultQpods = [];   // FIX: track which defaults were removed
 let buildStatuses = {};
 let activeDeployments = {};
 let terminals = [];
 let terminalSockets = [];
-let currentSort = { column: 'date', direction: 'desc' }; // Default sort
+let currentSort = { column: 'date', direction: 'desc' };
 
 // ── QPod management ───────────────────────────────────────────────────────────
+
+function loadRemovedDefaults() {
+    const stored = localStorage.getItem('removedDefaultQpods');
+    if (stored) { try { removedDefaultQpods = JSON.parse(stored); } catch(e) { removedDefaultQpods = []; } }
+}
+
+function saveRemovedDefaults() {
+    localStorage.setItem('removedDefaultQpods', JSON.stringify(removedDefaultQpods));
+}
+
+function getAllQpods() {
+    // FIX: filter out removed defaults, then append custom
+    return [...DEFAULT_QPODS.filter(q => !removedDefaultQpods.includes(q)), ...customQpods];
+}
+
 function loadQpods() {
+    removedDefaultQpods = []; 
+    saveRemovedDefaults();      
+    //loadRemovedDefaults();  // FIX: load removed defaults first
     const stored = localStorage.getItem('customQpods');
     if (stored) {
         try {
@@ -453,21 +467,20 @@ function saveCustomQpods() {
     localStorage.setItem('customQpods', JSON.stringify(customQpods));
 }
 
-function getAllQpods() {
-    return [...DEFAULT_QPODS, ...customQpods];
-}
-
 function renderQpodTags() {
     const container = document.getElementById('qpod-tags');
     if (!container) return;
     container.innerHTML = '';
 
-    // Default QPods — locked, no remove button
-    DEFAULT_QPODS.forEach(q => {
+    // FIX: Default QPods — now removable like custom ones
+    DEFAULT_QPODS.forEach((q, i) => {
+        if (removedDefaultQpods.includes(q)) return; // skip removed ones
         const tag = document.createElement('div');
-        tag.className = 'col-tag active locked';
-        tag.title = q + '.' + SSH_DOMAIN + ' (default — cannot be removed)';
-        tag.innerHTML = '<span class="qpod-lock-icon">🔒</span> ' + escapeHtml(q);
+        tag.className = 'col-tag active';
+        tag.title = q + '.' + SSH_DOMAIN;
+        tag.innerHTML =
+            escapeHtml(q) +
+            ` <button class="col-remove" title="Remove QPod" onclick="removeDefaultQpod(${i})">×</button>`;
         container.appendChild(tag);
     });
 
@@ -487,11 +500,21 @@ function renderQpodTags() {
     if (countEl) countEl.textContent = getAllQpods().length;
 }
 
+// FIX: New function to remove default QPods
+function removeDefaultQpod(i) {
+    const q = DEFAULT_QPODS[i];
+    if (!confirm('Remove QPod "' + q + '"?You can add it back manually if needed.')) return;
+    if (!removedDefaultQpods.includes(q)) removedDefaultQpods.push(q);
+    saveRemovedDefaults();
+    renderQpodTags();
+    showAlert('QPod removed: ' + q, 'info');
+}
+
+// FIX: No more "vmm" restriction — any QPod name is allowed
 function addCustomQpod() {
     const input = document.getElementById('custom-qpod');
     const qpod = input.value.trim();
     if (!qpod) { showAlert('Please enter a QPod name', 'error'); return; }
-    if (!qpod.includes('vmm')) { showAlert('QPod name should contain "vmm"', 'error'); return; }
     if (getAllQpods().includes(qpod)) { showAlert('QPod already exists', 'error'); return; }
     customQpods.push(qpod);
     saveCustomQpods();
@@ -505,9 +528,7 @@ function removeCustomQpod(i) {
     customQpods.splice(i, 1);
     saveCustomQpods();
     renderQpodTags();
-    // Remove from dropdown if it was selected
     const sel = document.getElementById('qpod-select');
-    const current = sel.value;
     Array.from(sel.options).forEach(opt => {
         if (!getAllQpods().includes(opt.value) && opt.value !== '') {
             sel.removeChild(opt);
@@ -678,68 +699,42 @@ function stopDeployment(buildName) {
 function parseDate(dateStr) {
     if (!dateStr || dateStr === 'N/A') return null;
     try {
-        // Parse format: "02-Mar-2024 12:34"
         const parts = dateStr.split(' ');
         const datePart = parts[0].split('-');
         const timePart = parts[1] ? parts[1].split(':') : ['00', '00'];
-        
         const monthMap = {
             'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
             'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
         };
-        
-        const day = parseInt(datePart[0]);
-        const month = monthMap[datePart[1]];
-        const year = parseInt(datePart[2]);
-        const hour = parseInt(timePart[0]);
-        const minute = parseInt(timePart[1]);
-        
-        return new Date(year, month, day, hour, minute);
-    } catch(e) {
-        return null;
-    }
+        return new Date(parseInt(datePart[2]), monthMap[datePart[1]], parseInt(datePart[0]), parseInt(timePart[0]), parseInt(timePart[1]));
+    } catch(e) { return null; }
 }
 
 function sortBuilds(column) {
-    // Toggle direction if same column, else default to desc
     if (currentSort.column === column) {
         currentSort.direction = currentSort.direction === 'desc' ? 'asc' : 'desc';
     } else {
         currentSort.column = column;
-        currentSort.direction = column === 'date' ? 'desc' : 'asc'; // dates default to newest first
+        currentSort.direction = column === 'date' ? 'desc' : 'asc';
     }
-    
     builds.sort((a, b) => {
         let valA, valB;
-        
-        if (column === 'name') {
-            valA = a.name.toLowerCase();
-            valB = b.name.toLowerCase();
-        } else if (column === 'date') {
-            valA = parseDate(a.date);
-            valB = parseDate(b.date);
-            
-            // Handle null dates
+        if (column === 'name') { valA = a.name.toLowerCase(); valB = b.name.toLowerCase(); }
+        else if (column === 'date') {
+            valA = parseDate(a.date); valB = parseDate(b.date);
             if (!valA && !valB) return 0;
             if (!valA) return 1;
             if (!valB) return -1;
         }
-        
-        let result;
-        if (valA < valB) result = -1;
-        else if (valA > valB) result = 1;
-        else result = 0;
-        
+        let result = valA < valB ? -1 : valA > valB ? 1 : 0;
         return currentSort.direction === 'desc' ? -result : result;
     });
-    
     renderBuilds();
 }
 
 // ── Table rendering ───────────────────────────────────────────────────────────
 function renderBuilds() {
     var visibleCols = trackedCols.filter(function(c) { return c.visible; });
-
     var headRow = document.getElementById('table-head-row');
     headRow.innerHTML = '';
 
@@ -883,10 +878,7 @@ async function loadBuilds() {
         loading.style.display = 'none';
         if (builds.error) { showAlert('Error: ' + builds.error, 'error'); return; }
         if (!builds.length) { showAlert('No builds found', 'error'); return; }
-        
-        // Builds are already sorted by date (newest first) from backend
         currentSort = { column: 'date', direction: 'desc' };
-        
         renderBuilds();
         container.style.display = 'block';
         showAlert('Loaded ' + builds.length + ' builds! Fetching versions...', 'info');
@@ -919,9 +911,9 @@ function createBuild(index) {
     const sel      = document.getElementById('qpod-select');
     const qpod     = sel.value;
 
-    if (!unixId || !password) { 
-        showAlert('Please enter Unix ID and Password', 'error'); 
-        return; 
+    if (!unixId || !password) {
+        showAlert('Please enter Unix ID and Password', 'error');
+        return;
     }
 
     if (!qpod) {
@@ -996,14 +988,11 @@ function openBlankTerminal() {
     }
 
     const qpod = document.getElementById('qpod-select').value;
-
     if (qpod) {
-        // QPod already selected — open SSH terminal directly
         launchSSHTerminal(unixId, password, qpod);
         return;
     }
 
-    // No QPod selected — show inline picker modal
     const existingModal = document.getElementById('qpod-picker-modal');
     if (existingModal) existingModal.remove();
 
@@ -1036,12 +1025,7 @@ function openBlankTerminal() {
         </div>
     `;
 
-    // Close on backdrop click
-    modal.addEventListener('click', e => {
-        if (e.target === modal) modal.remove();
-    });
-
-    // Connect on Enter key
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
     modal.addEventListener('keydown', e => {
         if (e.key === 'Enter') confirmQpodPicker();
         if (e.key === 'Escape') modal.remove();
@@ -1060,7 +1044,6 @@ function confirmQpodPicker() {
         return;
     }
     document.getElementById('qpod-picker-modal').remove();
-
     const unixId   = document.getElementById('unix-id').value.trim();
     const password = document.getElementById('password').value;
     launchSSHTerminal(unixId, password, qpod);
@@ -1071,9 +1054,7 @@ function launchSSHTerminal(unixId, password, qpod) {
     setTimeout(() => {
         const allContainers = document.querySelectorAll('.terminal-container');
         const last = allContainers[allContainers.length - 1];
-        if (last) {
-            last.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+        if (last) last.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 150);
 }
 
@@ -1203,7 +1184,7 @@ async function checkCapacities() {
         const r = await fetch('/api/check-capacity', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ unix_id: unixId, password, custom_qpods: customQpods })
+            body: JSON.stringify({ unix_id: unixId, password, active_qpods: getAllQpods() })
         });
         const capacities = await r.json();
         loading.style.display = 'none';
@@ -1245,7 +1226,7 @@ function showQpodAlert(msg) {
     el.style.display = 'block';
     el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     el.style.animation = 'none';
-    el.offsetHeight; // reflow
+    el.offsetHeight;
     el.style.animation = 'shake 0.5s';
 }
 
@@ -1262,21 +1243,17 @@ function clearCredentialAlert() {
 
 function showAlert(msg, type) {
     const a = document.getElementById('alert');
-    a.textContent = msg; 
+    a.textContent = msg;
     a.className = 'alert alert-' + type + ' show';
-    
-    // Scroll to alert and add shake animation for errors
     if (type === 'error') {
         a.classList.add('shake');
         setTimeout(() => a.classList.remove('shake'), 500);
     }
-    
-    // Smooth scroll to alert
     a.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function hideAlert() { 
-    const a = document.getElementById('alert'); 
+function hideAlert() {
+    const a = document.getElementById('alert');
     a.className = 'alert';
     a.classList.remove('shake');
 }
@@ -1351,7 +1328,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadColConfig();
     renderColTags();
     loadProfileVersions();
-    loadQpods();       // loads custom QPods from localStorage + renders all tags
+    loadQpods();
     loadBuilds();
 });
 </script>
@@ -1400,7 +1377,6 @@ def fetch_builds():
                         }
                     )
 
-        # Sort by date (newest first) - parse date format "02-Mar-2024 12:34"
         def parse_build_date(build):
             try:
                 if build["date"] != "N/A":
@@ -1415,23 +1391,16 @@ def fetch_builds():
     except Exception as e:
         print(f"Error fetching builds: {e}")
         import traceback
-
         traceback.print_exc()
         return {"error": str(e)}
 
 
 def fetch_image_version(build_url, image_key):
-    """
-    Fetch version for any image key from images.txt.
-    image_key can be a partial name like 'papi', 'alert-manager',
-    or a full path like 'mistsys/epic-ui'.
-    """
     try:
         images_url = build_url + "images.txt"
         response = requests.get(images_url, timeout=10)
         response.raise_for_status()
         content = response.text
-
         key_lower = image_key.lower()
 
         for line in content.splitlines():
@@ -1442,7 +1411,7 @@ def fetch_image_version(build_url, image_key):
             if colon_pos == -1:
                 continue
             image_path = line[:colon_pos].lower()
-            version = line[colon_pos + 1 :]
+            version = line[colon_pos + 1:]
 
             if (
                 image_path == key_lower
@@ -1458,14 +1427,10 @@ def fetch_image_version(build_url, image_key):
 
 
 def make_ssh_client(ssh_host, unix_id, password, timeout=8):
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    # Detect supported auth methods without wasting a full attempt
     transport = paramiko.Transport((ssh_host, 22))
     transport.connect()
     try:
-        allowed = transport.auth_none(unix_id)  # returns list of allowed methods
+        allowed = transport.auth_none(unix_id)
     except paramiko.BadAuthenticationType as e:
         allowed = e.allowed_types
     transport.close()
@@ -1483,7 +1448,6 @@ def make_ssh_client(ssh_host, unix_id, password, timeout=8):
             look_for_keys=False,
         )
     else:
-        # keyboard-interactive
         transport = paramiko.Transport((ssh_host, 22))
         transport.connect()
         transport.auth_interactive_dumb(
@@ -1498,8 +1462,6 @@ def make_ssh_client(ssh_host, unix_id, password, timeout=8):
 def check_qpod_capacity(qpod, unix_id, password):
     ssh_host = f"{qpod}.{SSH_DOMAIN}"
     try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh = make_ssh_client(ssh_host, unix_id, password, timeout=8)
         _, stdout, stderr = ssh.exec_command("vmm capacity -g vmm-default")
         output = stdout.read().decode("utf-8")
@@ -1507,12 +1469,7 @@ def check_qpod_capacity(qpod, unix_id, password):
         ssh.close()
 
         if error and not output:
-            return {
-                "qpod": qpod,
-                "status": "error",
-                "error": error.strip(),
-                "memory": "N/A",
-            }
+            return {"qpod": qpod, "status": "error", "error": error.strip(), "memory": "N/A"}
 
         memory_info = "N/A"
         for line in output.split("\n"):
@@ -1522,25 +1479,14 @@ def check_qpod_capacity(qpod, unix_id, password):
         if memory_info == "N/A" and output.strip():
             memory_info = output.strip()
 
-        return {
-            "qpod": qpod,
-            "status": "success",
-            "memory": memory_info,
-            "full_output": output,
-        }
+        return {"qpod": qpod, "status": "success", "memory": memory_info, "full_output": output}
     except paramiko.AuthenticationException:
-        return {
-            "qpod": qpod,
-            "status": "error",
-            "error": "Authentication failed",
-            "memory": "N/A",
-        }
+        return {"qpod": qpod, "status": "error", "error": "Authentication failed", "memory": "N/A"}
     except Exception as e:
         return {"qpod": qpod, "status": "error", "error": str(e), "memory": "N/A"}
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
-
 
 @app.route("/")
 def index():
@@ -1549,9 +1495,7 @@ def index():
         ssh_domain=SSH_DOMAIN,
         setup_script=SETUP_SCRIPT,
         current_year=datetime.now().year,
-        qpods_json=Markup(
-            json.dumps(QPODS)
-        ),  # ← injects QPODS into JS as DEFAULT_QPODS
+        qpods_json=Markup(json.dumps(QPODS)),
     )
 
 
@@ -1562,7 +1506,6 @@ def get_builds():
 
 @app.route("/api/image-version/<path:build_name>")
 def get_image_version(build_name):
-    """Return version for an arbitrary image key from images.txt."""
     image_key = request.args.get("image", "epic-ui")
     build_url = OVA_BASE_URL + build_name + "/"
     version = fetch_image_version(build_url, image_key)
@@ -1574,17 +1517,13 @@ def check_capacity():
     data = request.json
     unix_id = data.get("unix_id")
     password = data.get("password")
-    custom_qpods = data.get("custom_qpods", [])
+    active_qpods = data.get("active_qpods", [])
     if not unix_id or not password:
         return jsonify({"error": "Unix ID and password required"}), 400
 
-    # Merge default QPODS (server-side) with custom ones from frontend
-    all_qpods = list(
-        dict.fromkeys(QPODS + custom_qpods)
-    )  # preserves order, deduplicates
+    all_qpods = active_qpods if active_qpods else QPODS
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
-
     capacities = []
     with ThreadPoolExecutor(max_workers=len(all_qpods)) as executor:
         future_to_qpod = {
@@ -1595,21 +1534,18 @@ def check_capacity():
             try:
                 capacities.append(future.result())
             except Exception as e:
-                capacities.append(
-                    {
-                        "qpod": future_to_qpod[future],
-                        "status": "error",
-                        "error": str(e),
-                        "memory": "N/A",
-                    }
-                )
+                capacities.append({
+                    "qpod": future_to_qpod[future],
+                    "status": "error",
+                    "error": str(e),
+                    "memory": "N/A",
+                })
 
     capacities.sort(key=lambda x: x["qpod"])
     return jsonify(capacities)
 
 
 # ── WebSocket handlers ────────────────────────────────────────────────────────
-
 
 @socketio.on("execute_command")
 def handle_execute_command(data):
@@ -1621,17 +1557,12 @@ def handle_execute_command(data):
     def run_command():
         try:
             import pty, fcntl, time
-
             master, slave = pty.openpty()
             flags = fcntl.fcntl(master, fcntl.F_GETFL)
             fcntl.fcntl(master, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-            import subprocess
-
             process = subprocess.Popen(
                 ["/bin/bash", "-i"],
-                stdin=slave,
-                stdout=slave,
-                stderr=slave,
+                stdin=slave, stdout=slave, stderr=slave,
                 preexec_fn=os.setsid,
             )
             os.close(slave)
@@ -1657,9 +1588,7 @@ def handle_execute_command(data):
                     break
                 time.sleep(0.05)
 
-            socketio.emit(
-                "command_ended", {"exit_code": process.poll()}, room=session_id
-            )
+            socketio.emit("command_ended", {"exit_code": process.poll()}, room=session_id)
             try:
                 os.close(master)
             except:
@@ -1687,24 +1616,46 @@ def handle_connect_ssh(data):
     def run():
         try:
             import time
-
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            socketio.emit(
-                "output", {"data": f"Connecting to {ssh_host}...\r\n"}, room=session_id
-            )
+            socketio.emit("output", {"data": f"Connecting to {ssh_host}...\r\n"}, room=session_id)
             ssh = make_ssh_client(ssh_host, unix_id, password, timeout=30)
-
             socketio.emit("output", {"data": "Connected!\r\n\r\n"}, room=session_id)
+
             channel = ssh.invoke_shell()
             active_sessions[session_id] = {"ssh": ssh, "channel": channel}
             time.sleep(1)
-            while channel.recv_ready():
-                socketio.emit(
-                    "output",
-                    {"data": channel.recv(1024).decode("utf-8", errors="replace")},
-                    room=session_id,
-                )
+
+            # FIX: Auto ssh-agent setup for plain SSH connections too
+            socketio.emit("output", {"data": "\r\n🔑 Auto-configuring ssh-agent...\r\n"}, room=session_id)
+            channel.send(
+                'if ssh-add -l > /dev/null 2>&1; then '
+                '  echo "__AGENT_OK__"; '
+                'else '
+                '  source ~/.profile 2>/dev/null; '
+                '  if ssh-add -l > /dev/null 2>&1; then '
+                '    echo "__AGENT_OK__"; '
+                '  else '
+                '    eval $(ssh-agent -s) > /dev/null 2>&1; '
+                '    ssh-add 2>&1; '
+                '    echo "__AGENT_DONE__"; '
+                '  fi; '
+                'fi\n'
+            )
+            time.sleep(3)
+            buf = ""
+            timeout = time.time() + 15
+            while time.time() < timeout:
+                if channel.recv_ready():
+                    chunk = channel.recv(1024).decode("utf-8", errors="replace")
+                    buf += chunk
+                    socketio.emit("output", {"data": chunk}, room=session_id)
+                    if "__AGENT_OK__" in buf:
+                        socketio.emit("output", {"data": "\r\n✅ ssh-agent already running\r\n"}, room=session_id)
+                        break
+                    if "__AGENT_DONE__" in buf:
+                        socketio.emit("output", {"data": "\r\n✅ ssh-agent started automatically\r\n"}, room=session_id)
+                        break
+                time.sleep(0.1)
+
             while True:
                 if channel.recv_ready():
                     out = channel.recv(1024).decode("utf-8", errors="replace")
@@ -1713,12 +1664,9 @@ def handle_connect_ssh(data):
                 if channel.exit_status_ready():
                     break
                 time.sleep(0.05)
+
             exit_status = channel.recv_exit_status()
-            socketio.emit(
-                "output",
-                {"data": f"\r\n\r\nConnection closed (exit {exit_status})\r\n"},
-                room=session_id,
-            )
+            socketio.emit("output", {"data": f"\r\n\r\nConnection closed (exit {exit_status})\r\n"}, room=session_id)
             socketio.emit("session_ended", {"exit_code": exit_status}, room=session_id)
             channel.close()
             ssh.close()
@@ -1747,7 +1695,6 @@ def handle_monitor_deployment(data):
     def monitor():
         try:
             import time
-
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(ssh_host, username=unix_id, password=password, timeout=30)
@@ -1756,11 +1703,7 @@ def handle_monitor_deployment(data):
             while channel.recv_ready():
                 channel.recv(1024)
             channel.send(f"tail -f {log_path}\n")
-            socketio.emit(
-                "output",
-                {"data": f"\r\n📋 Streaming logs from {log_path}...\r\n"},
-                room=session_id,
-            )
+            socketio.emit("output", {"data": f"\r\n📋 Streaming logs from {log_path}...\r\n"}, room=session_id)
 
             start = time.time()
             last_update = time.time()
@@ -1773,22 +1716,11 @@ def handle_monitor_deployment(data):
                         socketio.emit("output", {"data": out}, room=session_id)
                         recent_logs.extend(out.split("\n"))
                         recent_logs = recent_logs[-10:]
-                        if (
-                            "Deployment success" in out
-                            or "deployment completed successfully" in out.lower()
-                        ):
-                            socketio.emit(
-                                "deployment_status",
-                                {"build_name": build_name, "status": "success"},
-                                room=session_id,
-                            )
+                        if "Deployment success" in out or "deployment completed successfully" in out.lower():
+                            socketio.emit("deployment_status", {"build_name": build_name, "status": "success"}, room=session_id)
                             break
                         if "Deployment failed" in out or "ERROR:" in out:
-                            socketio.emit(
-                                "deployment_status",
-                                {"build_name": build_name, "status": "failed"},
-                                room=session_id,
-                            )
+                            socketio.emit("deployment_status", {"build_name": build_name, "status": "failed"}, room=session_id)
                             break
                     except Exception:
                         pass
@@ -1796,33 +1728,19 @@ def handle_monitor_deployment(data):
                 if time.time() - last_update >= 30:
                     mins = int((time.time() - start) / 60)
                     clean = [
-                        l.strip()
-                        for l in recent_logs[-5:]
-                        if l.strip()
-                        and len(l.strip()) > 10
+                        l.strip() for l in recent_logs[-5:]
+                        if l.strip() and len(l.strip()) > 10
                         and not l.strip().startswith("[")
                         and "Running" not in l
                     ]
                     snippet = "\n".join(clean[-3:]) or "Processing..."
                     progress_text = f"⏱️ {mins}m\n{snippet}"
-                    socketio.emit(
-                        "log_progress",
-                        {"build_name": build_name, "log_snippet": progress_text},
-                        room=session_id,
-                    )
-                    socketio.emit(
-                        "output",
-                        {"data": f"\r\n⏱️  [{mins}m] Still deploying...\r\n"},
-                        room=session_id,
-                    )
+                    socketio.emit("log_progress", {"build_name": build_name, "log_snippet": progress_text}, room=session_id)
+                    socketio.emit("output", {"data": f"\r\n⏱️  [{mins}m] Still deploying...\r\n"}, room=session_id)
                     last_update = time.time()
 
                 if time.time() - start > 7200:
-                    socketio.emit(
-                        "deployment_status",
-                        {"build_name": build_name, "status": "timeout"},
-                        room=session_id,
-                    )
+                    socketio.emit("deployment_status", {"build_name": build_name, "status": "timeout"}, room=session_id)
                     break
                 if active_sessions.get(session_id, {}).get("stopped"):
                     break
@@ -1837,11 +1755,7 @@ def handle_monitor_deployment(data):
             ssh.close()
             active_sessions.pop(session_id, None)
         except Exception as e:
-            socketio.emit(
-                "deployment_status",
-                {"build_name": build_name, "status": "failed", "error": str(e)},
-                room=session_id,
-            )
+            socketio.emit("deployment_status", {"build_name": build_name, "status": "failed", "error": str(e)}, room=session_id)
 
     threading.Thread(target=monitor, daemon=True).start()
 
@@ -1871,32 +1785,66 @@ def handle_start_session(data):
     def run():
         try:
             import time
-
+            socketio.emit("output", {"data": f"Connecting to {ssh_host}...\r\n"}, room=session_id)
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            socketio.emit(
-                "output", {"data": f"Connecting to {ssh_host}...\r\n"}, room=session_id
-            )
             ssh.connect(ssh_host, username=unix_id, password=password, timeout=30)
-            socketio.emit(
-                "output",
-                {"data": "Connected!\r\n\r\nRunning ssh-add...\r\n"},
-                room=session_id,
-            )
+            socketio.emit("output", {"data": "Connected!\r\n"}, room=session_id)
+
             channel = ssh.invoke_shell()
-            channel.send("ssh-add\n")
-            time.sleep(2)
+            active_sessions[session_id] = {"ssh": ssh, "channel": channel}
+            time.sleep(1)
+
+            # Drain any login banner
             while channel.recv_ready():
-                socketio.emit(
-                    "output",
-                    {"data": channel.recv(1024).decode("utf-8")},
-                    room=session_id,
-                )
+                socketio.emit("output", {"data": channel.recv(4096).decode("utf-8", errors="replace")}, room=session_id)
+
+            # ── FIX: Auto ssh-agent setup ─────────────────────────────────────
+            socketio.emit("output", {"data": "\r\n🔑 Checking ssh-agent...\r\n"}, room=session_id)
+
+            # Step 1: source profile to pick up any existing agent
+            channel.send("source ~/.profile 2>/dev/null || source ~/.bash_profile 2>/dev/null; echo '__PROFILE_DONE__'\n")
+            buf = ""
+            timeout = time.time() + 10
+            while time.time() < timeout:
+                if channel.recv_ready():
+                    chunk = channel.recv(1024).decode("utf-8", errors="replace")
+                    buf += chunk
+                    socketio.emit("output", {"data": chunk}, room=session_id)
+                    if "__PROFILE_DONE__" in buf:
+                        break
+                time.sleep(0.1)
+
+            # Step 2: check agent; start one automatically if not available
+            agent_cmd = (
+                'if ssh-add -l > /dev/null 2>&1; then '
+                '  echo "__AGENT_OK__"; '
+                'else '
+                '  eval $(ssh-agent -s) > /dev/null 2>&1; '
+                '  ssh-add 2>&1; '
+                '  echo "__AGENT_DONE__"; '
+                'fi\n'
+            )
+            channel.send(agent_cmd)
+            buf = ""
+            timeout = time.time() + 15
+            while time.time() < timeout:
+                if channel.recv_ready():
+                    chunk = channel.recv(1024).decode("utf-8", errors="replace")
+                    buf += chunk
+                    socketio.emit("output", {"data": chunk}, room=session_id)
+                    if "__AGENT_OK__" in buf:
+                        socketio.emit("output", {"data": "\r\n✅ ssh-agent already running\r\n"}, room=session_id)
+                        break
+                    if "__AGENT_DONE__" in buf:
+                        socketio.emit("output", {"data": "\r\n✅ ssh-agent started automatically\r\n"}, room=session_id)
+                        break
+                time.sleep(0.1)
+            # ─────────────────────────────────────────────────────────────────
 
             command = f"{SETUP_SCRIPT} -n {setup_profile} -o __davinciVersion__={build_name}\n"
-            socketio.emit("output", {"data": f"Executing: {command}"}, room=session_id)
+            socketio.emit("output", {"data": f"\r\nExecuting: {command}"}, room=session_id)
             channel.send(command)
-            active_sessions[session_id] = {"ssh": ssh, "channel": channel}
 
             while True:
                 if channel.recv_ready():
@@ -1907,11 +1855,7 @@ def handle_start_session(data):
                 time.sleep(0.05)
 
             exit_status = channel.recv_exit_status()
-            socketio.emit(
-                "output",
-                {"data": f"\r\n\r\nSession ended (exit {exit_status})\r\n"},
-                room=session_id,
-            )
+            socketio.emit("output", {"data": f"\r\n\r\nSession ended (exit {exit_status})\r\n"}, room=session_id)
             socketio.emit("session_ended", {"exit_code": exit_status}, room=session_id)
             channel.close()
             ssh.close()
