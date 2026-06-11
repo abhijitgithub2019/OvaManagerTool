@@ -6,22 +6,51 @@ Enhanced with date sorting and validation error focusing
 Fixes: no VMM restriction, auto ssh-agent, all QPods removable
 """
 
+# IMPORTANT: when served by the gunicorn gevent-websocket worker, gevent must
+# monkey-patch the stdlib (ssl/socket/threading) BEFORE paramiko imports ssl.
+# Otherwise paramiko's SSH sockets stay truly blocking and a single slow QPod
+# freezes the single gevent worker forever (capacity check hangs). Guarded so
+# the app still runs under the plain dev server if gevent isn't installed.
+try:
+    from gevent import monkey as _gevent_monkey
+    _gevent_monkey.patch_all()
+except ImportError:
+    pass
+
 from flask import Flask, render_template_string, jsonify, request
 import requests
 from bs4 import BeautifulSoup
 import re
 import subprocess
 import os
+import socket
 import paramiko
 from flask_socketio import SocketIO, emit
 import threading
 import json
+import secrets
 from markupsafe import Markup
 from datetime import datetime
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = "your-secret-key-here"
-socketio = SocketIO(app, cors_allowed_origins="*")
+# SECURITY: load the Flask/Socket.IO session signing key from the environment.
+# Set FLASK_SECRET_KEY in the systemd unit (Environment=) or shell before start.
+# Falls back to a random per-process key so the app still runs in dev, but that
+# means sessions won't survive a restart unless FLASK_SECRET_KEY is provided.
+app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
+
+# SECURITY: when running behind the nginx TLS reverse proxy on the same host,
+# restrict cross-origin WebSocket/HTTP access to the public hostname(s).
+# Override with a comma-separated ALLOWED_ORIGINS env var if needed.
+_allowed_origins = os.environ.get("ALLOWED_ORIGINS")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=(
+        [o.strip() for o in _allowed_origins.split(",") if o.strip()]
+        if _allowed_origins
+        else "*"
+    ),
+)
 
 # Configuration
 OVA_BASE_URL = "http://storage1.qnc.kanlab.jnpr.net/ova/"
@@ -1460,13 +1489,20 @@ def fetch_image_version(build_url, image_key):
 
 
 def make_ssh_client(ssh_host, unix_id, password, timeout=8):
-    transport = paramiko.Transport((ssh_host, 22))
-    transport.connect()
+    # Probe which auth methods the server allows. Use an explicit socket with a
+    # timeout so an unreachable or stalled host fails fast instead of hanging the
+    # worker forever (the gevent worker is single-threaded under gunicorn).
+    sock = socket.create_connection((ssh_host, 22), timeout=timeout)
+    transport = paramiko.Transport(sock)
+    transport.banner_timeout = timeout
     try:
-        allowed = transport.auth_none(unix_id)
-    except paramiko.BadAuthenticationType as e:
-        allowed = e.allowed_types
-    transport.close()
+        transport.start_client(timeout=timeout)
+        try:
+            allowed = transport.auth_none(unix_id)
+        except paramiko.BadAuthenticationType as e:
+            allowed = e.allowed_types
+    finally:
+        transport.close()
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -1477,12 +1513,16 @@ def make_ssh_client(ssh_host, unix_id, password, timeout=8):
             username=unix_id,
             password=password,
             timeout=timeout,
+            banner_timeout=timeout,
+            auth_timeout=timeout,
             allow_agent=False,
             look_for_keys=False,
         )
     else:
-        transport = paramiko.Transport((ssh_host, 22))
-        transport.connect()
+        sock = socket.create_connection((ssh_host, 22), timeout=timeout)
+        transport = paramiko.Transport(sock)
+        transport.banner_timeout = timeout
+        transport.start_client(timeout=timeout)
         transport.auth_interactive_dumb(
             unix_id,
             lambda title, instructions, prompts: [password] * len(prompts),
@@ -1496,7 +1536,9 @@ def check_qpod_capacity(qpod, unix_id, password):
     ssh_host = f"{qpod}.{SSH_DOMAIN}"
     try:
         ssh = make_ssh_client(ssh_host, unix_id, password, timeout=8)
-        _, stdout, stderr = ssh.exec_command("vmm capacity -g vmm-default")
+        _, stdout, stderr = ssh.exec_command("vmm capacity -g vmm-default", timeout=20)
+        # Bound the read so a stalled remote command can't hang the worker.
+        stdout.channel.settimeout(20)
         output = stdout.read().decode("utf-8")
         error = stderr.read().decode("utf-8")
         ssh.close()
@@ -1515,6 +1557,8 @@ def check_qpod_capacity(qpod, unix_id, password):
         return {"qpod": qpod, "status": "success", "memory": memory_info, "full_output": output}
     except paramiko.AuthenticationException:
         return {"qpod": qpod, "status": "error", "error": "Authentication failed", "memory": "N/A"}
+    except (socket.timeout, socket.error) as e:
+        return {"qpod": qpod, "status": "error", "error": f"Unreachable or timed out: {e}", "memory": "N/A"}
     except Exception as e:
         return {"qpod": qpod, "status": "error", "error": str(e), "memory": "N/A"}
 
@@ -1529,6 +1573,125 @@ def index():
         setup_script=SETUP_SCRIPT,
         current_year=datetime.now().year,
         qpods_json=Markup(json.dumps(QPODS)),
+    )
+
+
+# ── Friendly error pages ──────────────────────────────────────────────────────
+ERROR_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ code }} - {{ title }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            padding: 20px;
+        }
+        .card {
+            background: white; border-radius: 12px; max-width: 520px; width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; text-align: center;
+        }
+        .card-head {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 30px 20px;
+        }
+        .card-head .emoji { font-size: 3em; display: block; margin-bottom: 10px; }
+        .card-head h1 { font-size: 1.6em; }
+        .card-body { padding: 30px 28px; color: #495057; }
+        .card-body p { line-height: 1.6; margin-bottom: 14px; }
+        .code-badge {
+            display: inline-block; font-family: 'Courier New', monospace; font-weight: 700;
+            background: #f1f3f5; color: #764ba2; padding: 4px 12px; border-radius: 6px;
+            margin-bottom: 16px;
+        }
+        .hint { background: #e7f3ff; border-left: 4px solid #2196F3; padding: 14px 16px;
+                border-radius: 4px; text-align: left; font-size: 0.92em; color: #0c5460; }
+        .btn {
+            display: inline-block; margin-top: 22px; padding: 12px 26px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;
+            text-decoration: none; border-radius: 6px; font-weight: 600;
+        }
+        .footer { color: #6c757d; font-size: 0.85em; padding: 0 20px 22px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="card-head">
+            <span class="emoji">{{ emoji }}</span>
+            <h1>{{ title }}</h1>
+        </div>
+        <div class="card-body">
+            <span class="code-badge">Error {{ code }}</span>
+            <p>{{ message }}</p>
+            <div class="hint">{{ hint|safe }}</div>
+            <a class="btn" href="/">⬅ Back to Launcher</a>
+        </div>
+        <div class="footer">© HPE {{ current_year }} · VMM Launcher</div>
+    </div>
+</body>
+</html>
+"""
+
+
+def _render_error(code, title, emoji, message, hint):
+    # API endpoints should get JSON, not an HTML page.
+    if request.path.startswith("/api/"):
+        return jsonify({"error": title, "message": message, "code": code}), code
+    page = render_template_string(
+        ERROR_PAGE,
+        code=code,
+        title=title,
+        emoji=emoji,
+        message=message,
+        hint=hint,
+        current_year=datetime.now().year,
+    )
+    return page, code
+
+
+@app.errorhandler(404)
+def handle_404(_e):
+    return _render_error(
+        404,
+        "Page Not Found",
+        "🔍",
+        "The page you’re looking for doesn’t exist on the VMM Launcher.",
+        "Check the URL, or head back to the home page to start a deployment.",
+    )
+
+
+@app.errorhandler(500)
+def handle_500(_e):
+    return _render_error(
+        500,
+        "Something Went Wrong",
+        "⚠️",
+        "The server hit an unexpected error while handling your request.",
+        "Please try again in a moment. If it keeps happening, contact the "
+        "VMM Launcher maintainer with the time and what you were doing.",
+    )
+
+
+@app.errorhandler(Exception)
+def handle_unexpected(e):
+    # Let Flask handle its own HTTP errors (404/405/etc.) via their handlers.
+    from werkzeug.exceptions import HTTPException
+
+    if isinstance(e, HTTPException):
+        return e
+    print(f"[ERROR] Unhandled exception: {e}")
+    return _render_error(
+        500,
+        "Something Went Wrong",
+        "⚠️",
+        "The server hit an unexpected error while handling your request.",
+        "Please try again in a moment. If it keeps happening, contact the "
+        "VMM Launcher maintainer with the time and what you were doing.",
     )
 
 
@@ -1556,23 +1719,49 @@ def check_capacity():
 
     all_qpods = active_qpods if active_qpods else QPODS
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    # Fan out the per-QPod SSH checks concurrently. Under the gunicorn
+    # gevent-websocket worker we MUST use gevent greenlets — a stdlib
+    # ThreadPoolExecutor deadlocks against the single gevent hub and the
+    # request hangs forever. Fall back to a thread pool only when gevent
+    # isn't active (e.g. the plain Flask dev server).
     capacities = []
-    with ThreadPoolExecutor(max_workers=len(all_qpods)) as executor:
-        future_to_qpod = {
-            executor.submit(check_qpod_capacity, q, unix_id, password): q
+    try:
+        import gevent
+
+        jobs = [
+            gevent.spawn(check_qpod_capacity, q, unix_id, password)
             for q in all_qpods
-        }
-        for future in as_completed(future_to_qpod):
-            try:
-                capacities.append(future.result())
-            except Exception as e:
+        ]
+        gevent.joinall(jobs, timeout=60)
+        for q, job in zip(all_qpods, jobs):
+            if job.ready() and job.successful() and job.value:
+                capacities.append(job.value)
+            else:
+                err = str(job.exception) if job.exception else "timed out"
                 capacities.append({
-                    "qpod": future_to_qpod[future],
+                    "qpod": q,
                     "status": "error",
-                    "error": str(e),
+                    "error": err,
                     "memory": "N/A",
                 })
+    except ImportError:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=len(all_qpods)) as executor:
+            future_to_qpod = {
+                executor.submit(check_qpod_capacity, q, unix_id, password): q
+                for q in all_qpods
+            }
+            for future in as_completed(future_to_qpod):
+                try:
+                    capacities.append(future.result())
+                except Exception as e:
+                    capacities.append({
+                        "qpod": future_to_qpod[future],
+                        "status": "error",
+                        "error": str(e),
+                        "memory": "N/A",
+                    })
 
     capacities.sort(key=lambda x: x["qpod"])
     return jsonify(capacities)
@@ -1939,12 +2128,19 @@ def handle_disconnect():
 
 
 if __name__ == "__main__":
+    # SECURITY: bind to localhost by default. In production the app is served by
+    # gunicorn behind the nginx TLS reverse proxy (also bound to 127.0.0.1), so it
+    # is never exposed directly. Override with HOST/PORT env vars only if you know
+    # you need to (e.g. HOST=0.0.0.0 for trusted-network dev testing).
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8080"))
+    debug = os.environ.get("FLASK_DEBUG", "").lower() in ("1", "true", "yes")
     print("=" * 60)
     print("🚀 Launch Setup from OVA Image")
     print(f"© HPE - {datetime.now().year}")
     print("=" * 60)
-    print(f"Server: http://localhost:8080")
+    print(f"Server: http://{host}:{port}")
     print(f"OVA:    {OVA_BASE_URL}")
     print(f"QPods:  {', '.join(QPODS)}")
     print("=" * 60)
-    socketio.run(app, debug=True, host="0.0.0.0", port=8080)
+    socketio.run(app, debug=debug, host=host, port=port)

@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# systemd unit for the VMM Launcher (hardened)
+#
+# Changes vs. the original unit:
+#   - Binds gunicorn to 127.0.0.1:8085 (was 0.0.0.0) so it is only reachable
+#     through the nginx TLS reverse proxy.
+#   - Injects FLASK_SECRET_KEY (and optional ALLOWED_ORIGINS) from a protected
+#     environment file instead of a hardcoded value.
+#
+# Install on q-jrd-vm-launcher:
+#   # 1) Create the secret env file (root-only readable):
+#   sudo install -m 600 /dev/null /etc/vmm-launcher.env
+#   printf 'FLASK_SECRET_KEY=%s\n' "$(openssl rand -hex 32)" | sudo tee -a /etc/vmm-launcher.env
+#   # Optional, once HTTPS is live, lock CORS to the real hostname:
+#   echo 'ALLOWED_ORIGINS=https://q-jrd-vm-launcher.englab.juniper.net' | sudo tee -a /etc/vmm-launcher.env
+#
+#   # 2) Install and start the service:
+#   sudo cp deploy/vmm-launcher.service /etc/systemd/system/vmm-launcher.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now vmm-launcher
+#   sudo systemctl status vmm-launcher
+# ─────────────────────────────────────────────────────────────────────────────
+
+[Unit]
+Description=VMM Launcher (OVA Build Manager)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/vmm_launcher
+EnvironmentFile=/etc/vmm-launcher.env
+ExecStart=/opt/vmm_venv/bin/gunicorn \
+    -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker \
+    -w 1 \
+    -b 127.0.0.1:8085 \
+    app:app
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

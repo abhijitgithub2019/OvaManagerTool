@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VMM Launcher - Temporarily Unavailable</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            padding: 20px;
+        }
+        .card {
+            background: white; border-radius: 12px; max-width: 520px; width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; text-align: center;
+        }
+        .card-head {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 30px 20px;
+        }
+        .card-head .emoji { font-size: 3em; display: block; margin-bottom: 10px; }
+        .card-head h1 { font-size: 1.6em; }
+        .card-body { padding: 30px 28px; color: #495057; }
+        .card-body p { line-height: 1.6; margin-bottom: 14px; }
+        .hint { background: #fff3cd; border-left: 4px solid #ffc107; padding: 14px 16px;
+                border-radius: 4px; text-align: left; font-size: 0.92em; color: #856404; }
+        .btn {
+            display: inline-block; margin-top: 22px; padding: 12px 26px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;
+            text-decoration: none; border-radius: 6px; font-weight: 600; cursor: pointer;
+        }
+        .footer { color: #6c757d; font-size: 0.85em; padding: 0 20px 22px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="card-head">
+            <span class="emoji">🛠️</span>
+            <h1>Service Temporarily Unavailable</h1>
+        </div>
+        <div class="card-body">
+            <p>The VMM Launcher isn’t responding right now. It may be restarting or
+               undergoing maintenance.</p>
+            <div class="hint">
+                This usually clears up in a minute. If it persists, the service may be
+                stopped — contact the VMM Launcher maintainer and mention the time you
+                saw this page.
+            </div>
+            <a class="btn" href="/" onclick="setTimeout(()=>location.reload(),100)">🔄 Try Again</a>
+        </div>
+        <div class="footer">© HPE · VMM Launcher</div>
+    </div>
+</body>
+</html>
