@@ -52,7 +52,7 @@ HTML_TEMPLATE = """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4/dist/socket.io.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -428,6 +428,31 @@ let activeDeployments = {};
 let terminals = [];
 let terminalSockets = [];
 let currentSort = { column: 'date', direction: 'desc' };
+
+// ── Socket.IO initialization check ───────────────────────────────────────────
+let socketIOReady = false;
+let socketIOError = null;
+
+// Wait for Socket.IO to load
+setTimeout(() => {
+    if (typeof io !== 'undefined') {
+        socketIOReady = true;
+    } else {
+        socketIOError = 'Socket.IO client library failed to load. Check your internet connection.';
+    }
+}, 1000);
+
+function createIOSocket() {
+    if (!socketIOReady) {
+        const errorMsg = socketIOError || 'Socket.IO not initialized. Waiting for library to load...';
+        if (typeof io === 'undefined') {
+            showAlert('⚠️ ' + errorMsg, 'error');
+            console.error('Socket.IO Error:', errorMsg);
+            throw new Error(errorMsg);
+        }
+    }
+    return io();
+}
 
 // ── QPod management ───────────────────────────────────────────────────────────
 
@@ -910,6 +935,8 @@ function createBuild(index) {
     const password = document.getElementById('password').value;
     const sel      = document.getElementById('qpod-select');
     const qpod     = sel.value;
+    const profileSel = document.getElementById('profile-version');
+    const profileVersion = profileSel && profileSel.value ? profileSel.value : '2.7.0';
 
     if (!unixId || !password) {
         showAlert('Please enter Unix ID and Password', 'error');
@@ -929,7 +956,7 @@ function createBuild(index) {
     }
 
     hideQpodAlert();
-    executeInTerminal(unixId, password, qpod, builds[index].name);
+    executeInTerminal(unixId, password, qpod, builds[index].name, profileVersion);
 }
 
 // ── Terminal helpers ──────────────────────────────────────────────────────────
@@ -1075,7 +1102,7 @@ function openTerminalForSSH(unixId, password, qpod) {
     term.writeln('\\x1b[1;33mQPod:\\x1b[0m ' + qpod + '.' + SSH_DOMAIN);
     term.writeln('');
 
-    const socket = io();
+    const socket = createIOSocket();
     terminalSockets.push({ id: terminalId, socket });
     term.onData(data => socket.emit('input', { data }));
     socket.on('output', msg => { term.write(msg.data); });
@@ -1084,7 +1111,7 @@ function openTerminalForSSH(unixId, password, qpod) {
     socket.emit('connect_ssh', { unix_id: unixId, password, qpod });
 }
 
-function executeInTerminal(unixId, password, qpod, buildName) {
+function executeInTerminal(unixId, password, qpod, buildName, profileVersion) {
     const terminalId = 'terminal-' + Date.now();
     setBuildStatus(buildName, 'pending', qpod);
 
@@ -1097,7 +1124,7 @@ function executeInTerminal(unixId, password, qpod, buildName) {
     term.writeln('\\x1b[1;32m✓ Terminal ready\\x1b[0m');
     term.writeln('');
 
-    const socket = io();
+    const socket = createIOSocket();
     terminalSockets.push({ id: terminalId, socket });
     term.onData(data => socket.emit('input', { data }));
     socket.on('output', msg => {
@@ -1118,7 +1145,7 @@ function executeInTerminal(unixId, password, qpod, buildName) {
         const logPath = '~/ns_launcher_data/q-pod' + qpodNumber + '/progress.log';
         term.writeln('\\r\\n\\x1b[1;36mℹ️  Auto-monitoring: ' + logPath + '\\x1b[0m\\r\\n');
 
-        const monitorSocket = io();
+        const monitorSocket = createIOSocket();
         activeDeployments[buildName] = monitorSocket;
 
         monitorSocket.on('log_progress', data => {
@@ -1146,7 +1173,13 @@ function executeInTerminal(unixId, password, qpod, buildName) {
         showAlert('Build deployment started for ' + buildName, 'info');
     });
 
-    socket.emit('start_session', { unix_id: unixId, password, qpod, build_name: buildName });
+    socket.emit('start_session', {
+        unix_id: unixId,
+        password,
+        qpod,
+        build_name: buildName,
+        profile_version: profileVersion
+    });
 }
 
 function sendCtrlCToTerminal(terminalId) {
